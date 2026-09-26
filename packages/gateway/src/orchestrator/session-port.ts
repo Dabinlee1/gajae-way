@@ -472,6 +472,13 @@ export class BrokerSessionPort implements SessionPort {
 		if (typeof sessionId !== "string" || sessionId.length === 0) {
 			throw new Error("session.create succeeded without a sessionId");
 		}
+		// The host is live right after create: this is the one moment a control op
+		// cannot hit endpoint_stale, so the thinking level from a `model:level`
+		// selector is applied here rather than deferred to the first turn.
+		if (typeof input.model === "string") {
+			const { thinking } = splitThinkingSuffix(input.model);
+			if (thinking) await this.#setThinking(this.#cliTransport(created.sessionId), thinking);
+		}
 		const persistedEpoch = this.#database.bindings.getSessionRecord(input.originKey)?.epoch;
 		if (persistedEpoch !== undefined && persistedEpoch > input.epoch) {
 			throw new Error(`session bind for ${input.originKey} epoch ${input.epoch} lost to epoch ${persistedEpoch}`);
