@@ -3109,7 +3109,7 @@ async function createInboundTurnLifecycle(
 		runtime.inbound.delete(steered.message_id);
 		acknowledgeSteer(runtime, steered, turnId);
 	};
-	const onTerminal = async ({ text }: PersonaTerminalInput) => {
+	const onTerminal = async ({ text, alreadyPosted }: PersonaTerminalInput) => {
 		let threw = false;
 		try {
 			const replyText = deliveredParts.length > 0 ? deliveredParts.join("\n") : text;
@@ -3132,6 +3132,9 @@ async function createInboundTurnLifecycle(
 				);
 			});
 			if (deliveredParts.length === 0 && isSilentOutput(text)) return;
+			// Recovered from the transcript after it already reached the room under
+			// another turn: recorded above, never posted a second time.
+			if (alreadyPosted) return;
 			if (!nonLoopback) {
 				if (connection)
 					connection.write({
@@ -3179,7 +3182,7 @@ async function createInboundTurnLifecycle(
 			throw error;
 		} finally {
 			try {
-				if (!threw) closeTerminalLink(nonLoopback ? "silent" : "loopback");
+				if (!threw) closeTerminalLink(nonLoopback ? (alreadyPosted ? "no_delivery" : "silent") : "loopback");
 			} finally {
 				endProgress();
 			}
