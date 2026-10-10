@@ -2779,8 +2779,10 @@ async function createInboundTurnLifecycle(
 			message = reactionReply.body;
 			if (!message) return;
 		}
-		// [FILE:<path>] tokens become their own deliveries after the text parts.
-		const fileReply = parseFileReply(message);
+		// MEDIA:<path> lines become their own deliveries after the text parts, on
+		// platforms whose upload goes through the ledger. Elsewhere the lines stay in
+		// the text for an adapter that attaches them natively.
+		const fileReply = platformSupportsFiles(origin.platform) ? parseFileReply(message) : undefined;
 		if (fileReply) message = fileReply.body;
 		// Control tokens are internal protocol, never user-visible. Models routinely
 		// wrap them in a "reasoning" preamble ("...nothing to add.\n\n[SILENT]"), so a
@@ -3615,7 +3617,7 @@ export function currentConversationNotice(origin: OriginRef): string {
 			: []),
 		...(platformSupportsFiles(origin.platform)
 			? [
-					`File attachments: put [FILE:<absolute path>] anywhere in a reply to upload that file into this conversation (same thread as the reply). The token is removed from the text; each token is one file, at most ${OUTBOUND_FILES_PER_TURN_CAP} per reply and ${Math.floor(OUTBOUND_FILE_MAX_BYTES / (1024 * 1024))} MB each. Write the file first (your workspace or /tmp); files under the gateway home outside the workspace are refused. A file that cannot be sent shows up as a short "(file not sent: ...)" note.`,
+					`File attachments: to upload a file into this conversation (same thread as the reply), put MEDIA:<absolute path> on a line of its own. The line is removed from the text; one line per file, at most ${OUTBOUND_FILES_PER_TURN_CAP} per reply and ${Math.floor(OUTBOUND_FILE_MAX_BYTES / (1024 * 1024))} MB each. Write the file first (your workspace or /tmp); files under the gateway home outside the workspace are refused. A file that cannot be sent shows up as a short "(file not sent: ...)" note.`,
 				]
 			: []),
 		// Live 2026-09-25: the persona held turns open for 13 minutes in a
