@@ -95,6 +95,21 @@ Discord / Telegram / Slack ──> gajaeway gateway ──> your persona (gjc)
 
    Telegram이나 Slack을 사용할 때는 `dist/gajaeway-telegram` 또는 `dist/gajaeway-slack`을 별도로 시작하세요.
 
+## Discord 봇 토큰 얻기
+
+`gajaeway setup`을 실행하고 Discord를 선택하면 봇 토큰을 얻기 위한 단계별 가이드가 표시됩니다:
+
+1. [Discord 개발자 포털](https://discord.com/developers/applications)로 이동
+2. **New Application** 클릭, 이름 입력 (예: "My gajae-way agent")
+3. **Bot** → **Add Bot**로 이동
+4. **TOKEN** 아래에서 **Reset Token** → **Yes, do it!** 클릭
+5. **Copy**를 클릭하여 봇 토큰 복사
+6. **중요**: **GATEWAY INTENTS**까지 스크롤하고 **MESSAGE CONTENT INTENT** 활성화 (봇이 메시지를 읽을 수 있도록 함)
+7. **Save Changes** 클릭
+8. 프롬프트에서 토큰 붙여넣기
+
+검증 후에는 준비가 된 **초대 링크**를 받게 되며, 이를 다른 사람과 공유하거나 직접 클릭하여 Discord 서버에 봇을 추가할 수 있습니다. 링크에는 필요한 권한이 자동으로 포함됩니다.
+
 ## 당신의 것으로 만들기
 
 `SOUL.md`, `AGENTS.md`, 및 `USER.md`를 `$GAJAEWAY_HOME/workspace`에 둡니다. `SOUL.md`와 `USER.md`는 각 턴에 대해 읽습니다. gjc는 세션이 시작될 때 `AGENTS.md`를 검색합니다; 나중에 편집이나 삭제는 다음 턴에서 그 프로젝트 컨텍스트 사본을 대체합니다. 워크스페이스는 또한 당신의 페르소나의 작업 디렉토리입니다. 홈 디렉토리를 개인용으로 유지합니다: 이는 구성, 게이트웨이 데이터베이스, 당신의 워크스페이스, 및 기억을 포함합니다.

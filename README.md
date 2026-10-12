@@ -97,6 +97,21 @@ GAJAEWAY_HOME=~/.gajaeway ./dist/gajaeway up
 
 The `up` command will prompt you for credentials, then report next steps. For production deployment, see [Deployment Guide](docs/deployment.md).
 
+## Getting a Discord Bot Token
+
+When you run `gajaeway setup` and select Discord, you'll see step-by-step guidance for getting your bot token:
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application**, name it (e.g., "My gajae-way agent")
+3. Go to **Bot** → **Add Bot**
+4. Under **TOKEN**, click **Reset Token** → **Yes, do it!**
+5. Click **Copy** to copy your bot token
+6. **Important**: Scroll down to **GATEWAY INTENTS** and enable **MESSAGE CONTENT INTENT** (lets the bot read messages, not just user names)
+7. Click **Save Changes**
+8. Paste the token when prompted
+
+After validation, you'll receive a ready-to-click **invite link** that you can share with others or click yourself to add the bot to your Discord server. The link includes the required permissions automatically.
+
 ## Make it yours
 
 Put `SOUL.md`, `AGENTS.md`, and `USER.md` in `$GAJAEWAY_HOME/workspace`. `SOUL.md` and `USER.md` are read for each turn. gjc discovers `AGENTS.md` when a session starts; a later edit or deletion supersedes that project-context copy on the next turn. The workspace is also your persona's working directory. Keep the home directory private: it contains configuration, the gateway database, your workspace, and memory.

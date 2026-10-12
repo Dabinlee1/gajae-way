@@ -215,6 +215,72 @@ docker compose restart gajaeway-discord
 
 Configuration and state are stored in the `gajaeway_home` volume, which persists across container restarts.
 
+### Model Credentials for GJC
+
+The Docker image includes gjc (the AI coding agent) installed at `/usr/local/bin/gjc`. To enable gjc to access AI models (Claude, etc.), you must mount your gjc agent directory with credentials from the host:
+
+**Option 1: Mount gjc agent directory** (recommended)
+
+Edit `compose.yaml` and uncomment the gjc volume mount:
+
+```yaml
+services:
+  gajaeway-gateway:
+    volumes:
+      - gajaeway_home:/home/gajaeway/.gajaeway
+      # Uncomment to share model credentials with gjc inside container:
+      - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
+```
+
+Then start with:
+```bash
+GJC_AGENT_DIR=~/.gjc docker compose up
+```
+
+**Option 2: Mount credentials only** (if gjc config is elsewhere)
+
+```yaml
+services:
+  gajaeway-gateway:
+    volumes:
+      - gajaeway_home:/home/gajaeway/.gajaeway
+      # Mount just the credentials directory:
+      - ${GJC_CREDENTIALS_PATH:-~/.gjc/credentials}:/home/gajaeway/.gjc/credentials:ro
+```
+
+**Option 3: Separate compose override file**
+
+Create `compose.credentials.yaml`:
+
+```yaml
+services:
+  gajaeway-gateway:
+    volumes:
+      - ~/.gjc:/home/gajaeway/.gjc:ro
+  gajaeway-discord:
+    volumes:
+      - ~/.gjc:/home/gajaeway/.gjc:ro
+  gajaeway-slack:
+    volumes:
+      - ~/.gjc:/home/gajaeway/.gjc:ro
+  gajaeway-telegram:
+    volumes:
+      - ~/.gjc:/home/gajaeway/.gjc:ro
+```
+
+Then start with:
+```bash
+docker compose -f compose.yaml -f compose.credentials.yaml up
+```
+
+**Without model credentials**
+
+If you do not mount credentials, gjc will fall back to configured models in the Docker container's isolated gjc config at `/home/gajaeway/.gjc`, but most users will want to reuse their host's gjc configuration with authenticated providers (see above).
+
+**Read-only mounts**
+
+All gjc mounts should be read-only (`:ro`) to prevent the container from accidentally modifying your host's credentials.
+
 ## Manual Configuration
 
 If you prefer not to use the interactive `gajaeway setup` command, you can manually create the configuration files:

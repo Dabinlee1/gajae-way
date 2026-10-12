@@ -1,21 +1,24 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { GajaewayClient } from "@gajae-gateway/sdk";
-import { runSetup } from "./setup";
 import type { RunSetupOptions } from "./setup";
+import { enabledAdapters, runSetup } from "./setup";
 
 export interface UpOptions extends Omit<RunSetupOptions, "home"> {
 	readonly home: string;
 	readonly socket?: string;
 	/** Skip the setup check and assume config exists. */
 	readonly skipSetup?: boolean;
+	/** Spawn runner for tests; defaults to Bun.spawn */
+	readonly spawn?: (cmd: string, args: string[], opts?: { cwd?: string }) => unknown;
 }
 
 /**
  * `gajaeway up`: One-command setup and start for first-time users.
  *
  * Checks for existing config.json; if missing, runs interactive setup.
- * Reports next steps and hints about service installation on local machines.
+ * Then starts the gateway daemon and enabled adapters in the background.
+ * Reports the gateway status and how to stop it.
  */
 export async function runUp(options: UpOptions): Promise<void> {
 	const log = options.log ?? ((line: string) => console.log(line));
@@ -65,29 +68,66 @@ export async function runUp(options: UpOptions): Promise<void> {
 			await client.close();
 		}
 	} catch {
-		// Gateway is not running
+		// Gateway is not running; we'll try to start it
 	}
 
 	if (isRunning) {
 		log("✓ Gateway is already running.");
-		log("\nNext steps:");
+		const adapters = await enabledAdapters(options.home);
+		log(`✓ Enabled adapters: ${adapters.join(", ")}`);
+		log("\nYou can now:");
 		log("  • Send a message to your bot on Discord/Slack/Telegram");
-		log("  • View logs: gajaeway ops cycle");
-		log("  • See memory: gajaeway memory search");
-		log("\nStop the gateway with: gajaeway shutdown");
+		log("  • View status: gajaeway ops cycle");
+		log("  • Search memory: gajaeway memory search <query>");
+		log("\nStop with: gajaeway shutdown");
 	} else {
-		log("⚠ Gateway is not running. Start it with one of:");
-		log("");
-		log("  Local installation:");
-		log("    • Install services: gajaeway services install --bin-dir ./dist [--platform darwin|linux]");
-		log("    • Then services will start on boot; restart with: gajaeway ops restart-stack");
-		log("");
-		log("  Docker Compose (from the repository root):");
-		log("    • First time: docker compose run --rm -it setup gajaeway setup");
-		log("    • Then start: docker compose up");
-		log("");
-		log("  Manual (for development):");
-		log("    • Terminal 1: bun packages/gateway/src/main.ts daemon");
-		log("    • Terminal 2: dist/gajaeway-discord  (or gajaeway-slack/gajaeway-telegram)");
+		// Try to start the gateway and adapters
+		log("Starting gateway and adapters...");
+
+		// Detect if we're in the source checkout (has dist/gajaeway-gateway)
+		// vs. running from installed binaries
+		const isSourceCheckout = await access(join(options.home, "..", "..", "dist", "gajaeway-gateway"))
+			.then(() => true)
+			.catch(() => false);
+
+		const spawn = options.spawn ?? ((cmd: string, args: string[]) => Bun.spawn([cmd, ...args]));
+
+		try {
+			// Start gateway daemon
+			// Use bun packages/gateway/src/main.ts if in source checkout, else use binary
+			const gatewayCmd = isSourceCheckout ? "bun" : "gajaeway-gateway";
+			const gatewayArgs = isSourceCheckout ? ["packages/gateway/src/main.ts", "daemon"] : ["daemon"];
+
+			const gatewayProcess = spawn(gatewayCmd, gatewayArgs, { cwd: process.cwd() });
+
+			// Give gateway a moment to start
+			await new Promise((resolve) => setTimeout(resolve, 2000));
+
+			// Start enabled adapters
+			const adapters = await enabledAdapters(options.home);
+			for (const adapter of adapters) {
+				const adapterCmd = isSourceCheckout ? "dist/gajaeway-" + adapter : "gajaeway-" + adapter;
+				const adapterProcess = spawn(adapterCmd, [], { cwd: process.cwd() });
+				// Don't wait for adapter; let it run in background
+			}
+
+			log("\n✓ Gateway started.");
+			if (adapters.length > 0) {
+				log(`✓ Adapters started: ${adapters.join(", ")}`);
+			}
+
+			log("\nYou can now:");
+			log("  • Send a message to your bot on Discord/Slack/Telegram");
+			log("  • View status: gajaeway ops cycle");
+			log("  • Search memory: gajaeway memory search <query>");
+			log("\nStop with: gajaeway shutdown");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log(`Failed to start services: ${message}`);
+			log("\nAlternative: start manually in separate terminals:");
+			log("  Terminal 1: bun packages/gateway/src/main.ts daemon");
+			log("  Terminal 2: dist/gajaeway-discord");
+			throw error;
+		}
 	}
 }

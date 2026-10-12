@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { printDiscordBotReady, printDiscordSetupGuide } from "./discord-setup";
 
 /**
  * `gajaeway setup`: guided credential setup for the platform adapters.
@@ -197,6 +198,8 @@ export interface ValidatedIdentity {
 	readonly summary: string;
 	/** A user id the platform names as the app owner, when it names one. */
 	readonly ownerId?: string;
+	/** Application ID (Discord only). */
+	readonly appId?: string;
 }
 
 async function requestJson(
@@ -256,7 +259,8 @@ export async function validateDiscord(
 	const ownerId = !hasTeam && typeof owner?.id === "string" ? owner.id : undefined;
 	return {
 		platform: "discord",
-		summary: `bot ${String(me.body.username ?? "?")} (${String(me.body.id ?? "?")}) of application ${appId}`,
+		summary: `bot named ${String(me.body.username ?? "?")} (${String(me.body.id ?? "?")}) of application ${appId}`,
+		appId,
 		...(ownerId ? { ownerId } : {}),
 	};
 }
@@ -487,13 +491,16 @@ async function askRequiredSecret(prompter: Prompter, question: string): Promise<
 export async function tokensFromPrompts(
 	prompter: Prompter,
 	parsed: ParsedSetupArgs,
+	log?: (line: string) => void,
 ): Promise<{ tokens: SetupTokens; owners: string[] }> {
 	const wanted = parsed.adapters ?? [];
 	const enable = async (platform: SetupPlatform, label: string) =>
 		parsed.adapters ? wanted.includes(platform) : await askYes(prompter, `Enable ${label}?`);
 	const tokens: { -readonly [K in keyof SetupTokens]: SetupTokens[K] } = {};
 	if (await enable("discord", "Discord")) {
-		const token = await askRequiredSecret(prompter, "Discord bot token (input hidden): ");
+		const logger = log ?? (() => {});
+		printDiscordSetupGuide(logger);
+		const token = await askRequiredSecret(prompter, "Paste your Discord bot token here (input hidden): ");
 		const appId = parsed.discordAppId ?? (await prompter.ask("Discord application id (optional): ")).trim();
 		tokens.discord = { token, ...(appId ? { appId } : {}) };
 	}
@@ -638,7 +645,7 @@ export async function runSetup(args: readonly string[], options: RunSetupOptions
 	} else {
 		const prompter = (options.prompter ?? terminalPrompter)();
 		try {
-			({ tokens, owners } = await tokensFromPrompts(prompter, parsed));
+			({ tokens, owners } = await tokensFromPrompts(prompter, parsed, log));
 		} finally {
 			prompter.close();
 		}
@@ -647,6 +654,14 @@ export async function runSetup(args: readonly string[], options: RunSetupOptions
 	try {
 		const identities = await validateAll(tokens, options.fetch ?? ((input, init) => fetch(input, init)));
 		for (const identity of identities) log(`${identity.platform}: token valid — ${identity.summary}`);
+		
+		// Print Discord invite URL after successful validation
+		const discordIdentity = identities.find((i) => i.platform === "discord");
+		if (discordIdentity && tokens.discord && discordIdentity.appId) {
+			const botName = (discordIdentity.summary.match(/named (\S+)/) ?? [])[1];
+			printDiscordBotReady(log, discordIdentity.appId, botName);
+		}
+		
 		for (const identity of identities)
 			if (identity.ownerId && owners.length === 0) {
 				owners.push(identity.ownerId);
