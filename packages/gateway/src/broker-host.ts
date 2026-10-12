@@ -7,7 +7,7 @@ import { assertAgentDb } from "./broker-agent/agent-db";
 import { BROKER_ENV_PROTECTED_KEYS, LIVE_BROKER_ENV_KEYS, resolveBrokerAgentSource } from "./broker-agent/allowlist";
 import { assertAgentDirectory, BrokerAgentError, recoverProvision } from "./broker-agent/provision";
 import type { GatewayConfig } from "./config";
-import { GJC_ATTACH_ONLY_ENV, readPinnedGjcVersion } from "./orchestrator/broker";
+import { defaultPidAlive, GJC_ATTACH_ONLY_ENV, readPinnedGjcVersion } from "./orchestrator/broker";
 import { judgeBrokerLiveness, type PidAliveProbe } from "./orchestrator/broker-liveness";
 
 const BROKER_ENV_FILE = "broker.env";
@@ -32,17 +32,6 @@ const DEFAULT_WATCHDOG_CONFIG: Required<BrokerWatchdogConfig> = {
 	killGraceMs: 5_000,
 	isPidAlive: defaultPidAlive,
 };
-
-function defaultPidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-		if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
-		throw error;
-	}
-}
 
 export async function runBrokerHost(config: GatewayConfig): Promise<number> {
 	let lease: Lease;
