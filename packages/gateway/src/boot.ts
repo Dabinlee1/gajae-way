@@ -157,12 +157,21 @@ export async function bootGateway(options: BootGatewayOptions = {}): Promise<Boo
 		);
 		claimed = true;
 		// Reap any leftover worker processes from the previous epoch before proceeding.
-		// This ensures no orphaned child processes persist across restarts.
-		const reaped = await reapLeftoverWorkers(config.home);
-		if (reaped.found > 0) {
-			console.log(
-				`process-reaper: found=${reaped.found} killed=${reaped.killed} failed=${reaped.failed} leftover workers from previous epoch`,
-			);
+		// Wrap in timeout to prevent boot blockage if process scanning is slow.
+		try {
+			const reaped = await Promise.race([
+				reapLeftoverWorkers(config.home),
+				new Promise<{ found: number; killed: number; failed: number }>((resolve) => {
+					setTimeout(() => resolve({ found: 0, killed: 0, failed: 0 }), 5000);
+				}),
+			]);
+			if (reaped.found > 0) {
+				console.log(
+					`process-reaper: found=${reaped.found} killed=${reaped.killed} failed=${reaped.failed} leftover workers from previous epoch`,
+				);
+			}
+		} catch (error) {
+			console.warn(`process-reaper failed during boot: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		const personaWorkspace = await resolvePersonaWorkspace(config.home);
 		const pinnedVersion = readPinnedGjcVersion();
