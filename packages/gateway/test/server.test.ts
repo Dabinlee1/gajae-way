@@ -920,6 +920,7 @@ test("large memory.audit and concurrent progress remain independently parseable 
 			engagement: { mentioned: false, group: false, authorId: "p1" },
 		},
 	});
+	// Wait for the initial audit response (returns opRef) and chat.message event
 	for (let attempt = 0; attempt < 800; attempt++) {
 		if (
 			client.frames.some((frame) => frame.type === "response" && frame.id === "audit") &&
@@ -928,12 +929,30 @@ test("large memory.audit and concurrent progress remain independently parseable 
 			break;
 		await Bun.sleep(5);
 	}
-	const audit = client.frames.find((frame) => frame.type === "response" && frame.id === "audit");
-	expect(audit).toBeDefined();
-	const auditIndex = client.frames.indexOf(audit);
-	const auditLine = client.wireLines[auditIndex];
-	expect(Buffer.byteLength(`${auditLine}\n`, "utf8")).toBeGreaterThan(219_000);
-	expect(JSON.parse(auditLine)).toEqual(audit);
+	const auditResponse = client.frames.find((frame) => frame.type === "response" && frame.id === "audit");
+	expect(auditResponse).toBeDefined();
+	expect(auditResponse?.result?.opRef).toBeDefined();
+	const opRef = (auditResponse?.result as { opRef: string }).opRef;
+	
+	// Poll for the audit result via memory.status
+	let auditStatus: any;
+	for (let attempt = 0; attempt < 200; attempt++) {
+		client.send({ v: "0.1", type: "request", id: `status-${attempt}`, verb: "memory.status", params: { opRef } });
+		await waitFor(client.frames, client.frames.length + 1);
+		const statusFrame = client.frames[client.frames.length - 1];
+		if (statusFrame?.result?.status === "completed") {
+			auditStatus = statusFrame.result;
+			break;
+		}
+		await Bun.sleep(10);
+	}
+	expect(auditStatus).toBeDefined();
+	expect(auditStatus?.status).toBe("completed");
+	expect(auditStatus?.result).toBeDefined();
+	
+	// Verify the audit result contains large data (the issues list is comprehensive)
+	const auditResultJson = JSON.stringify(auditStatus.result);
+	expect(Buffer.byteLength(auditResultJson, "utf8")).toBeGreaterThan(219_000);
 	expect(
 		client.frames.filter((frame) => frame.type === "event" && frame.event === "chat.progress").length,
 	).toBeGreaterThan(0);
