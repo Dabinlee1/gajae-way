@@ -1,6 +1,7 @@
 import { chmod, mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { type ConfigOverrides, loadConfig } from "./config";
+import { reapLeftoverWorkers } from "./ops/process-reaper";
 import { seedDefaultMonitors } from "./monitors/defaults";
 import { MonitorRegistry } from "./monitors/registry";
 import {
@@ -155,6 +156,14 @@ export async function bootGateway(options: BootGatewayOptions = {}): Promise<Boo
 			options.takeover ?? defaultTakeoverPorts(),
 		);
 		claimed = true;
+		// Reap any leftover worker processes from the previous epoch before proceeding.
+		// This ensures no orphaned child processes persist across restarts.
+		const reaped = await reapLeftoverWorkers(config.home);
+		if (reaped.found > 0) {
+			console.log(
+				`process-reaper: found=${reaped.found} killed=${reaped.killed} failed=${reaped.failed} leftover workers from previous epoch`,
+			);
+		}
 		const personaWorkspace = await resolvePersonaWorkspace(config.home);
 		const pinnedVersion = readPinnedGjcVersion();
 		// Peek at recorded authority from existing database (before full initialization)
