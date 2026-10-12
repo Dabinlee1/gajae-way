@@ -468,6 +468,25 @@ export function formatFailureNotice(error: unknown): string {
 }
 
 /**
+ * The notice a person reads in the room. The runtime diagnosis is usually a
+ * redacted fixed sentence (`internal: Prompt submission failed.`) that tells the
+ * owner neither that nothing was answered nor what to do, so the chat line leads
+ * with both and keeps the diagnosis after them for triage (#14). The prefix stays
+ * `[turn failed]`: admin turn views classify the row by it.
+ */
+export function formatFailureChatNotice(error: unknown): string {
+	const described = describeFailure(error);
+	const remediable = isRebindableCode(described.code) || described.code === "rebind_cap_exceeded";
+	// A quota diagnosis is already the instruction; resending cannot help it.
+	const remedy = remediable
+		? " Send /new to start a fresh conversation, then send it again."
+		: described.code === "provider_quota_exhausted"
+			? ""
+			: " Please send it again in a moment.";
+	return `[turn failed] This message was not answered.${remedy}\n(diagnosis: ${described.text})`;
+}
+
+/**
  * The subset of the gateway store a rebind needs. `metaGet`/`metaSet` are
  * optional durable counters: when the store provides them the budget survives
  * a gateway restart; when absent the rebinder degrades to process-local

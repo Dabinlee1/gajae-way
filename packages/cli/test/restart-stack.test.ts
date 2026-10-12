@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { main } from "../src/main";
 import {
 	effectiveRestartState,
+	launchRestartStack,
 	readRestartReceipt,
 	renderRestartReceipt,
 	runRestartStack,
@@ -200,6 +201,25 @@ test("a sequence whose supervisor died reads as interrupted, not running", async
 	};
 	expect(effectiveRestartState(receipt)).toBe("interrupted");
 	expect(renderRestartReceipt(receipt)[0]).toBe("restart-stack r5: interrupted");
+});
+
+test("a supervisor that cannot start fails the receipt instead of leaving it queued", async () => {
+	const { home, cleanup } = await tempHome();
+	try {
+		// A container has no systemd-run: the spawn itself fails.
+		await expect(
+			launchRestartStack({ home, platform: "linux", env: { PATH: join(home, "no-such-bin") } }),
+		).rejects.toThrow(/restart-stack .*: failed: supervisor systemd-run could not be started/);
+		const receipt = await readRestartReceipt(home);
+		expect(receipt?.state).toBe("failed");
+		expect(receipt?.finishedAt).toBeDefined();
+		expect(receipt?.steps.every((step) => step.result === "skipped")).toBe(true);
+		const rendered = renderRestartReceipt(receipt!);
+		expect(rendered[0]).toMatch(/: failed$/);
+		expect(rendered).toContainEqual(expect.stringContaining("detail: supervisor systemd-run could not be started"));
+	} finally {
+		await cleanup();
+	}
 });
 
 test("the supervisor never uses bootout and escapes the gateway cgroup on systemd", () => {
