@@ -1,9 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-/** Hard TTL for any spawned agent child process (6 hours). */
-const PROCESS_TTL_MS = 6 * 60 * 60 * 1000;
-
 export interface ProcessReaperOptions {
 	/** GJC executable being used for spawning. */
 	readonly gjcExecutable?: string;
@@ -23,11 +20,8 @@ export interface ReapResult {
  * Identifies and kills leftover child processes from the previous gateway epoch.
  * This is called on boot before accepting work, ensuring no orphaned children persist.
  */
-export async function reapLeftoverWorkers(
-	home: string,
-	options: ProcessReaperOptions = {},
-): Promise<ReapResult> {
-	const { gjcExecutable = "gjc", timeoutMs = 30_000, log = (s) => console.warn(s) } = options;
+export async function reapLeftoverWorkers(_home: string, options: ProcessReaperOptions = {}): Promise<ReapResult> {
+	const { gjcExecutable = "gjc", log = (s) => console.warn(s) } = options;
 	let found = 0;
 	let killed = 0;
 	let failed = 0;
@@ -50,15 +44,11 @@ export async function reapLeftoverWorkers(
 				log(`process-reaper: killed leftover worker pid=${pid}`);
 			} catch (error) {
 				failed++;
-				log(
-					`process-reaper: failed to kill pid=${pid}: ${error instanceof Error ? error.message : String(error)}`,
-				);
+				log(`process-reaper: failed to kill pid=${pid}: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
 	} catch (error) {
-		log(
-			`process-reaper: scan failed: ${error instanceof Error ? error.message : String(error)}`,
-		);
+		log(`process-reaper: scan failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
 	return { found, killed, failed };
@@ -83,7 +73,7 @@ async function findLikelyOrphanedWorkers(gjcExecutable: string): Promise<number[
 /**
  * Linux-specific process discovery using /proc.
  */
-async function findOrphanedLinux(gjcExecutable: string): Promise<number[]> {
+async function findOrphanedLinux(_gjcExecutable: string): Promise<number[]> {
 	const result: number[] = [];
 	try {
 		const procPids = await readdir("/proc").catch(() => []);
@@ -125,7 +115,7 @@ async function findOrphanedLinux(gjcExecutable: string): Promise<number[]> {
 /**
  * Unix-specific process discovery using ps.
  */
-async function findOrphanedUnix(gjcExecutable: string): Promise<number[]> {
+async function findOrphanedUnix(_gjcExecutable: string): Promise<number[]> {
 	const result: number[] = [];
 	try {
 		const proc = Bun.spawn(["ps", "-eo", "ppid=,pid=,command="], {
@@ -182,9 +172,7 @@ async function killProcess(pid: number, timeoutMs = 2_000): Promise<void> {
 				setTimeout(() => resolve(false), timeoutMs);
 			});
 
-			const stillAlive = await Promise.race([exitPromise.then(() => false), timeoutPromise]).catch(
-				() => true,
-			);
+			const stillAlive = await Promise.race([exitPromise.then(() => false), timeoutPromise]).catch(() => true);
 
 			if (!stillAlive) return; // Process is dead
 		} catch {

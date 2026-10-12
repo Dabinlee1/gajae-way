@@ -1,9 +1,9 @@
 import { chmod, mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { type ConfigOverrides, loadConfig } from "./config";
-import { reapLeftoverWorkers } from "./ops/process-reaper";
 import { seedDefaultMonitors } from "./monitors/defaults";
 import { MonitorRegistry } from "./monitors/registry";
+import { reapLeftoverWorkers } from "./ops/process-reaper";
 import {
 	GjcCliUnavailableError,
 	GlobalGjcClient,
