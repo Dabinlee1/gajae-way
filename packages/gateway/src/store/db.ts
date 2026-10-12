@@ -2685,14 +2685,28 @@ export class GatewayDatabase {
 	 * it is unknowable now that the turn is over, so it is NOT closed and NOT
 	 * dispatched - it stays attributed to this op-ref as an operator-visible
 	 * hold (`inboundSteersHeld`). Returns how many TRIGGER rows closed, so a
-	 * repeat call is a no-op.
+	 * repeat call is a no-op. Issue #247: if a turn is already done but
+	 * terminal_delivery_id is NULL, this call will set it without counting as a
+	 * new close.
 	 */
 	inboundTurnComplete(opRef: string, unlinkedReason: TerminalUnlinkedReason = "no_delivery"): number {
-		return this.#database
+		const unlinked = JSON.stringify({ none: unlinkedReason });
+		let completed = this.#database
 			.query(
 				"UPDATE inbound_messages SET state = 'done', turn_state = 'done', terminal_delivery_id = COALESCE(terminal_delivery_id, ?) WHERE turn_op_ref = ? AND turn_role = 'trigger' AND state = 'pending' AND turn_state IN ('bound', 'accepted')",
 			)
-			.run(JSON.stringify({ none: unlinkedReason }), opRef).changes;
+			.run(unlinked, opRef).changes;
+		// Issue #247: if the turn is already done but terminal_delivery_id is NULL,
+		// set it now. This happens when a parallel path closes the turn before
+		// delivering an answer, or when the terminal link is claimed after state transition.
+		if (completed === 0) {
+			this.#database
+				.query(
+					"UPDATE inbound_messages SET terminal_delivery_id = COALESCE(terminal_delivery_id, ?) WHERE turn_op_ref = ? AND turn_role = 'trigger' AND turn_state = 'done' AND terminal_delivery_id IS NULL",
+				)
+				.run(unlinked, opRef);
+		}
+		return completed;
 	}
 
 	/**

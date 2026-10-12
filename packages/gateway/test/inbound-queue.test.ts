@@ -169,6 +169,22 @@ test("completed turns are never pending or nonterminal", async () => {
 	expect(db.inboundPendingCount(ORIGIN_KEY)).toBe(0);
 });
 
+test("inboundTurnComplete sets terminal_delivery_id even if turn_state is already done", async () => {
+	const db = await open();
+	const opRef = "gw-p-already-done";
+	db.inboundEnqueue(message("m1", "hello"));
+	db.inboundBindTurn({ messageId: "m1", originKey: ORIGIN_KEY, epoch: 0, opRef, sessionId: "session-1" });
+	// Manually set the turn_state to 'done' to simulate a concurrent path
+	const raw = new (await import("bun:sqlite")).Database(join(home, "gateway.db"));
+	raw.query("UPDATE inbound_messages SET turn_state = 'done' WHERE turn_op_ref = ?").run(opRef);
+	raw.close();
+	// Now call inboundTurnComplete and it should still set the terminal_delivery_id
+	const changed = db.inboundTurnComplete(opRef, "turn_failed");
+	const row = db.inboundTurnRow(opRef);
+	expect(row?.terminal_delivery_id).toBe('{"none":"turn_failed"}');
+	expect(row?.turn_state).toBe('done');
+});
+
 test("turn bindings are scoped per origin", async () => {
 	const db = await open();
 	const secondOrigin = "discord:dm:2";
