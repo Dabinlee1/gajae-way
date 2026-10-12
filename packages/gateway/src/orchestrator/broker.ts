@@ -563,7 +563,9 @@ export class GlobalGjcClient {
 	#reapAgedChildren(now = Date.now()): void {
 		for (const [child, startTime] of [...this.#childStartTimes.entries()]) {
 			if (now - startTime > CHILD_PROCESS_TTL_MS) {
-				this.#log(`reaping aged child process (age=${Math.round((now - startTime) / 1000)}s, ttl=${CHILD_PROCESS_TTL_MS / 1000}s)`);
+				this.#log(
+					`reaping aged child process (age=${Math.round((now - startTime) / 1000)}s, ttl=${CHILD_PROCESS_TTL_MS / 1000}s)`,
+				);
 				void this.#terminate(child).catch(() => {});
 			}
 		}
