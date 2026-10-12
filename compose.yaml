@@ -8,16 +8,16 @@ services:
     environment:
       GAJAEWAY_HOME: /home/gajaeway/.gajaeway
       HOME: /home/gajaeway
-      GJC_EXECUTABLE: /usr/local/bin/gjc
+      # Point to gjc executable from host mount (required)
+      GJC_EXECUTABLE: /usr/local/gjc-bin/gjc
       GJC_CODING_AGENT_DIR: /home/gajaeway/.gjc
     volumes:
       # Persistent home directory with all state, config, memory, and database
       - gajaeway_home:/home/gajaeway/.gajaeway
-      # Model credentials volume (mount from host ~/.gjc/credentials)
-      # Uncomment and adjust the host path to share model credentials with gjc inside container:
-      # - ${GJC_CREDENTIALS_PATH:-~/.gjc/credentials}:/home/gajaeway/.gjc/credentials:ro
-      # Or mount the entire gjc agent directory:
-      # - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
+      # GJC executable from host (REQUIRED)
+      - ${GJC_BIN_PATH:-/usr/local/bin/gjc}:/usr/local/gjc-bin/gjc:ro
+      # GJC agent directory (credentials, config, models) from host
+      - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
     ports:
       # Gateway socket is local-only (Unix domain socket), not exposed to Docker bridge
       # Use 'docker compose exec' or volume mount for client connections
@@ -37,12 +37,14 @@ services:
     environment:
       GAJAEWAY_HOME: /home/gajaeway/.gajaeway
       HOME: /home/gajaeway
-      GJC_EXECUTABLE: /usr/local/bin/gjc
+      GJC_EXECUTABLE: /usr/local/gjc-bin/gjc
       GJC_CODING_AGENT_DIR: /home/gajaeway/.gjc
     volumes:
       - gajaeway_home:/home/gajaeway/.gajaeway
-      # Mount gjc credentials (optional, for model access)
-      # - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
+      # GJC executable from host (required)
+      - ${GJC_BIN_PATH:-/usr/local/bin/gjc}:/usr/local/gjc-bin/gjc:ro
+      # GJC agent directory from host (for model credentials)
+      - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
     restart: unless-stopped
     depends_on:
       gajaeway-gateway:
@@ -57,12 +59,14 @@ services:
     environment:
       GAJAEWAY_HOME: /home/gajaeway/.gajaeway
       HOME: /home/gajaeway
-      GJC_EXECUTABLE: /usr/local/bin/gjc
+      GJC_EXECUTABLE: /usr/local/gjc-bin/gjc
       GJC_CODING_AGENT_DIR: /home/gajaeway/.gjc
     volumes:
       - gajaeway_home:/home/gajaeway/.gajaeway
-      # Mount gjc credentials (optional, for model access)
-      # - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
+      # GJC executable from host (required)
+      - ${GJC_BIN_PATH:-/usr/local/bin/gjc}:/usr/local/gjc-bin/gjc:ro
+      # GJC agent directory from host (for model credentials)
+      - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
     restart: unless-stopped
     depends_on:
       gajaeway-gateway:
@@ -77,12 +81,14 @@ services:
     environment:
       GAJAEWAY_HOME: /home/gajaeway/.gajaeway
       HOME: /home/gajaeway
-      GJC_EXECUTABLE: /usr/local/bin/gjc
+      GJC_EXECUTABLE: /usr/local/gjc-bin/gjc
       GJC_CODING_AGENT_DIR: /home/gajaeway/.gjc
     volumes:
       - gajaeway_home:/home/gajaeway/.gajaeway
-      # Mount gjc credentials (optional, for model access)
-      # - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
+      # GJC executable from host (required)
+      - ${GJC_BIN_PATH:-/usr/local/bin/gjc}:/usr/local/gjc-bin/gjc:ro
+      # GJC agent directory from host (for model credentials)
+      - ${GJC_AGENT_DIR:-~/.gjc}:/home/gajaeway/.gjc:ro
     restart: unless-stopped
     depends_on:
       gajaeway-gateway:
