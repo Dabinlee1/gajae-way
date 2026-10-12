@@ -1248,7 +1248,11 @@ export async function startSlackAdapter(
 				noteDisconnected("socket");
 			},
 		},
-		{ factory: ports.socketFactory, log },
+		{
+			factory: ports.socketFactory,
+			log,
+			...(config.socketLivenessTimeoutMs === undefined ? {} : { livenessTimeoutMs: config.socketLivenessTimeoutMs }),
+		},
 	);
 	log.log("Slack adapter starting.");
 	await socket.start();

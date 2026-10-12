@@ -284,6 +284,7 @@ async function applyConfigReload(
 	}
 	runtime.config = result.config;
 	runtime.personaSessions.setStallTimeoutMs(result.config.stallTimeoutMs);
+	runtime.personaSessions.setHostLimits(result.config.sessions);
 	console.info(
 		`gateway config reload (${trigger}) ok; applied=[${result.changed.join(",")}] restart-required=[${result.restartRequired.join(",")}] ignored=[${result.ignored.join(",")}]`,
 	);
@@ -564,6 +565,8 @@ function createRuntime(options: GatewayServerOptions): Runtime {
 		brokerAgentDir: options.broker?.agentDir,
 		sessionModel: options.config.model,
 		stallTimeoutMs: options.config.stallTimeoutMs,
+		maxLiveHosts: options.config.sessions?.maxLiveHosts,
+		hostIdleRetireMs: options.config.sessions?.idleRetireMs,
 		brokerGeneration: () => options.broker?.generation ?? 0,
 		// biome-ignore lint/style/noNonNullAssertion: broker is non-null when lambda is called
 		brokerLiveness: options.broker ? () => options.broker!.judgeLiveness() : undefined,
@@ -684,6 +687,9 @@ function createRuntime(options: GatewayServerOptions): Runtime {
 		void monitors.reconcile();
 		void personaSessions
 			.recover()
+			.then(async () => {
+				await personaSessions.sweepIdleHosts();
+			})
 			.catch((error: unknown) => console.error(`persona recovery sweep failed: ${diagnostic(error)}`));
 		void work
 			.recover()
