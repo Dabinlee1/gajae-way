@@ -70,7 +70,7 @@ describe("gajaeway up", () => {
 			}
 
 			const output = lines.join("\n");
-			expect(output).toContain("Starting gateway") || output.includes("already running");
+			expect(output.includes("Starting gateway") || output.includes("already running")).toBe(true);
 		});
 	});
 
