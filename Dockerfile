@@ -28,12 +28,12 @@ WORKDIR /app
 # Copy compiled binaries from builder
 COPY --from=builder /build/dist /usr/local/bin
 
-# Create non-root user for security
-RUN useradd -m -u 1000 gajaeway
+# Create non-root user for security (use existing user if available, else create with UID 1001)
+RUN id gajaeway 2>/dev/null || useradd -m -u 1001 gajaeway
 
 # Set up home directory with proper permissions
 RUN mkdir -p /home/gajaeway/.gajaeway && \
-    chown -R gajaeway:gajaeway /home/gajaeway
+    chown -R gajaeway:gajaeway /home/gajaeway 2>/dev/null || true
 
 USER gajaeway
 
