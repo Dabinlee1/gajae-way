@@ -14,11 +14,12 @@ COPY scripts ./scripts
 RUN bun install --frozen-lockfile
 RUN bun run build
 
-# Runtime stage: minimal image with compiled binaries
+# Runtime stage: minimal image with compiled binaries and gjc
 FROM oven/bun:1.4.0
 
-# Install system dependencies: procps (for healthcheck)
+# Install system dependencies: curl (for gjc), procps (for healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,6 +27,15 @@ WORKDIR /app
 
 # Copy compiled binaries from builder
 COPY --from=builder /build/dist /usr/local/bin
+
+# Install gjc (required by gateway for AI runtime)
+# Download and install the official gjc binary from releases
+RUN mkdir -p /tmp/gjc-install && cd /tmp/gjc-install && \
+    curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/gajae-code/main/scripts/install.sh -o install.sh && \
+    bash install.sh && \
+    cp /root/.local/bin/gjc /usr/local/bin/gjc && \
+    chmod +x /usr/local/bin/gjc && \
+    rm -rf /tmp/gjc-install /root/.local/bin
 
 # Create non-root user for security (use existing user if available, else create with UID 1001)
 RUN id gajaeway 2>/dev/null || useradd -m -u 1001 gajaeway
@@ -40,16 +50,17 @@ USER gajaeway
 # Environment setup
 ENV GAJAEWAY_HOME=/home/gajaeway/.gajaeway
 ENV HOME=/home/gajaeway
-# GJC_EXECUTABLE must be provided by the host via PATH or mount
-# See docker-compose.yaml for mount examples
+ENV GJC_EXECUTABLE=/usr/local/bin/gjc
+
+# gjc agent directory (isolated to container, not shared with host by default)
+# Can be overridden by mounting host's ~/.gjc at runtime for credentials/models
 ENV GJC_CODING_AGENT_DIR=/home/gajaeway/.gjc
 
-# Expose gateway socket for direct connection (if needed)
+# Expose volumes
 VOLUME ${GAJAEWAY_HOME}
 VOLUME /home/gajaeway/.gjc
 
 # Health check: verify the gateway is responsive
-# Note: healthcheck will fail until GJC_EXECUTABLE is available and config is set
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD gajaeway status > /dev/null 2>&1 || exit 1
 

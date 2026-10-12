@@ -654,14 +654,14 @@ export async function runSetup(args: readonly string[], options: RunSetupOptions
 	try {
 		const identities = await validateAll(tokens, options.fetch ?? ((input, init) => fetch(input, init)));
 		for (const identity of identities) log(`${identity.platform}: token valid — ${identity.summary}`);
-		
+
 		// Print Discord invite URL after successful validation
 		const discordIdentity = identities.find((i) => i.platform === "discord");
 		if (discordIdentity && tokens.discord && discordIdentity.appId) {
 			const botName = (discordIdentity.summary.match(/named (\S+)/) ?? [])[1];
 			printDiscordBotReady(log, discordIdentity.appId, botName);
 		}
-		
+
 		for (const identity of identities)
 			if (identity.ownerId && owners.length === 0) {
 				owners.push(identity.ownerId);
