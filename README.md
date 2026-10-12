@@ -1,3 +1,7 @@
+# gajae-way
+
+**Put your GJC coding agent in Discord/Slack/Telegram: it answers, remembers, and runs real coding work from chat.**
+
 <p align="center">
   <img src="assets/logo-horizontal.png" alt="gajae-way" width="640">
 </p>
@@ -60,35 +64,38 @@ The Bun workspace under `packages/` is divided by responsibility:
 
 For how memory, monitors, and the gateway work end to end, see [the documentation](docs/).
 
-## Start in five steps
+## Quick Start
 
-1. Build the standalone programs on a machine with Bun:
+**Option 1: Docker Compose (recommended for first-time users)**
 
-   ```sh
-   bun run build
-   ```
+```sh
+# Clone and enter the repository
+git clone https://github.com/Yeachan-Heo/gajae-way.git
+cd gajae-way
 
-   This creates `dist/gajaeway-gateway`, `dist/gajaeway-discord`, `dist/gajaeway-telegram`, `dist/gajaeway-slack`, `dist/gajaeway-admin`, and `dist/gajaeway`.
+# Run interactive setup (choose your platform: Discord, Slack, or Telegram)
+docker compose run --rm -it setup gajaeway setup
 
-2. Choose a private home directory and create `$GAJAEWAY_HOME/config.json` plus separate credential files. The gateway configuration references credential **files**, rather than storing secret values inline. See [deployment](docs/deployment.md) for the full layout and to install the release-pinned GJC package, provision the private broker agent with `gajaeway setup --broker-agent`, and install the broker service before starting the gateway.
+# Start the gateway and adapters
+docker compose up
+```
 
-3. Create `$GAJAEWAY_HOME/adapter-discord.json` with its own `tokenFile` reference for Discord. Create the analogous Telegram adapter configuration when using Telegram, or `adapter-slack.json` with `botTokenFile` and `appTokenFile` references when using Slack.
+Then send your bot a DM on Discord/Slack/Telegram and start chatting.
 
-4. Run the gateway as a long-lived daemon under your service manager:
+**Option 2: Local installation with build**
 
-   ```sh
-   dist/gajaeway-gateway daemon
-   ```
+Requirements: Bun ≥1.4.0, `gjc` ≥0.16.0 on your PATH.
 
-   The gateway connects to the separately supervised broker service and uses the private `$GAJAEWAY_HOME/broker/agent` directory. It does not use a system-wide executable or the operator's source agent directory as its runtime authority; see [deployment](docs/deployment.md) for pin and service setup.
+```sh
+# Build the binaries
+bun install
+bun run build
 
-5. Start the Discord adapter, then send your bot a DM:
+# Run one-command setup and start
+GAJAEWAY_HOME=~/.gajaeway ./dist/gajaeway up
+```
 
-   ```sh
-   dist/gajaeway-discord
-   ```
-
-   Start `dist/gajaeway-telegram` or `dist/gajaeway-slack` separately when using Telegram or Slack.
+The `up` command will prompt you for credentials, then report next steps. For production deployment, see [Deployment Guide](docs/deployment.md).
 
 ## Make it yours
 

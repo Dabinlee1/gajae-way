@@ -1,5 +1,46 @@
 # Deployment
 
+## Quick Start
+
+### Option 1: Docker Compose (recommended for first-time users)
+
+The fastest way to get running: a one-command setup experience with persistent volumes and healthchecks.
+
+```sh
+# Clone the repository
+git clone https://github.com/Yeachan-Heo/gajae-way.git
+cd gajae-way
+
+# Run interactive setup (choose Discord, Slack, or Telegram)
+docker compose run --rm -it setup gajaeway setup
+
+# Start the gateway and adapters
+docker compose up
+```
+
+Then send your bot a DM and start chatting. For details on environment variables and configuration, see [Docker Compose](#docker-compose) below.
+
+### Option 2: Local Installation (Bun)
+
+If you prefer a local installation, build the binaries and use the one-command `up` workflow:
+
+```sh
+# Requirements: Bun ≥1.4.0, gjc ≥0.16.0 on PATH
+git clone https://github.com/Yeachan-Heo/gajae-way.git
+cd gajae-way
+
+bun install
+bun run build
+
+# One-command setup and status check
+GAJAEWAY_HOME=~/.gajaeway ./dist/gajaeway up
+```
+
+The `gajaeway up` command:
+- Prompts for credentials if `config.json` doesn't exist
+- Validates tokens against each platform API
+- Reports next steps (daemon start, service installation, etc.)
+
 ## Production unit
 
 Production runs the compiled standalone binaries. Build them on a machine with Bun:
@@ -126,6 +167,140 @@ Provision the private directory with `gajaeway setup --broker-agent` while the b
 Provisioning uses the `broker` lease and journaled generations under `broker/provision/`. A staged `gen-*` generation is swapped into the private agent directory while the old files are held in `prev-*`; a manifest records the generation and entry fingerprints. If provisioning is interrupted, the broker host or next provisioning command recovers the journal under the same lease by finishing the manifest-committed generation or rolling back to the previous files.
 
 Inspect the provision result with `gajaeway-gateway broker-agent status` (or `--json`). Entry states distinguish source changes, private-copy changes, divergence, and missing inputs. `gajaeway ops cycle` projects that drift under `brokerAgent`; it raises `broker_agent_unprovisioned` for an unprovisioned/interrupted state or a missing required `agent.db` copy. Review other drift before forcing a new snapshot, since a changed private copy may contain broker-refreshed state.
+
+## Docker Compose
+
+The repository includes a `compose.yaml` for containerized deployment with persistent volumes and health checks.
+
+### First-time setup with Docker Compose
+
+```sh
+# Interactive setup (choose adapters and enter credentials)
+docker compose run --rm -it setup gajaeway setup
+
+# Or with environment variables (non-interactive)
+docker compose run --rm -it \
+  -e GAJAEWAY_DISCORD_TOKEN=$DISCORD_TOKEN \
+  -e GAJAEWAY_OWNER_IDS=$YOUR_ID \
+  setup gajaeway setup --from-env --adapters discord
+```
+
+### Start the services
+
+```sh
+# Start gateway and enabled adapters
+docker compose up
+
+# Start specific adapters only
+docker compose --profile discord up          # Discord only
+docker compose --profile slack up            # Slack only
+docker compose --profile discord,slack up    # Discord + Slack
+```
+
+### Common commands
+
+```sh
+# Check configuration
+docker compose exec gajaeway-gateway gajaeway setup --status
+
+# View logs
+docker compose logs -f gajaeway-gateway
+
+# Access shell
+docker compose exec gajaeway-gateway sh
+
+# Restart adapters
+docker compose restart gajaeway-discord
+```
+
+Configuration and state are stored in the `gajaeway_home` volume, which persists across container restarts.
+
+## Manual Configuration
+
+If you prefer not to use the interactive `gajaeway setup` command, you can manually create the configuration files:
+
+### 1. Create the home directory
+
+```sh
+mkdir -p $GAJAEWAY_HOME/secrets
+chmod 0700 $GAJAEWAY_HOME
+```
+
+### 2. Create credential files
+
+Store each credential in a separate file (0600 permissions):
+
+```sh
+# Discord
+echo "YOUR_DISCORD_BOT_TOKEN" > $GAJAEWAY_HOME/secrets/discord-token
+chmod 0600 $GAJAEWAY_HOME/secrets/discord-token
+
+# Slack
+echo "xoxb-YOUR-SLACK-BOT-TOKEN" > $GAJAEWAY_HOME/secrets/slack-bot-token
+echo "xapp-YOUR-SLACK-APP-TOKEN" > $GAJAEWAY_HOME/secrets/slack-app-token
+chmod 0600 $GAJAEWAY_HOME/secrets/slack-*
+
+# Telegram
+echo "123456:YOUR_TELEGRAM_BOT_TOKEN" > $GAJAEWAY_HOME/secrets/telegram-token
+chmod 0600 $GAJAEWAY_HOME/secrets/telegram-token
+```
+
+### 3. Create config.json
+
+```json
+{
+  "schemaVersion": 1,
+  "logVerbosity": "info",
+  "credentials": {
+    "discord": { "credentialFile": "$GAJAEWAY_HOME/secrets/discord-token" }
+  }
+}
+```
+
+Save this as `$GAJAEWAY_HOME/config.json`.
+
+### 4. Create adapter configurations
+
+For each enabled adapter, create a configuration file:
+
+**Discord** (`$GAJAEWAY_HOME/adapter-discord.json`):
+```json
+{
+  "tokenFile": "$GAJAEWAY_HOME/secrets/discord-token",
+  "intents": ["GUILDS", "GUILD_MESSAGES", "DIRECT_MESSAGES", "MESSAGE_CONTENT"]
+}
+```
+
+**Slack** (`$GAJAEWAY_HOME/adapter-slack.json`):
+```json
+{
+  "botTokenFile": "$GAJAEWAY_HOME/secrets/slack-bot-token",
+  "appTokenFile": "$GAJAEWAY_HOME/secrets/slack-app-token",
+  "socketMode": true
+}
+```
+
+**Telegram** (`$GAJAEWAY_HOME/adapter-telegram.json`):
+```json
+{
+  "tokenFile": "$GAJAEWAY_HOME/secrets/telegram-token",
+  "pollingTimeout": 30
+}
+```
+
+### 5. Start the gateway
+
+```sh
+dist/gajaeway-gateway daemon
+```
+
+Then start your adapters in separate terminals:
+
+```sh
+dist/gajaeway-discord
+dist/gajaeway-slack
+dist/gajaeway-telegram
+```
 
 ## Slack adapter
 
