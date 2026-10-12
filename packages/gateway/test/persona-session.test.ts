@@ -403,6 +403,8 @@ test("a post-start prompt failure delivers the runtime's code and logs its bound
 		"code=prompt_failed provider_code=prompt_failed phase=post_start category=agent_runtime provenance=agent_failed",
 	);
 	expect(terminalLine).toContain("cause=Agent run failed after execution started");
+	// The redacted cause joins gajae-code's local `SDK invocation failed` record only by these ids.
+	expect(terminalLine).toContain(`command=command-${first.opRef} turn=turn-${first.opRef}`);
 });
 
 // #210: a bash call blocked on an interactive auth prompt (`op whoami`) timed

@@ -393,6 +393,8 @@ export class ScriptedSessionPort implements SessionPort {
 						? {
 								status: "failed",
 								...startedAt,
+								commandId: operation.commandId,
+								turnId: operation.turnId,
 								terminalAt: operation.terminalAt,
 								error: {
 									...(operation.errorCode ? { code: operation.errorCode } : {}),

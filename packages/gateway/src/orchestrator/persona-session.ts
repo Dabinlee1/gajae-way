@@ -2935,9 +2935,20 @@ function terminalFailureDiagnosis(status: StatusReport): string {
 		["provenance", outcome?.provenance],
 		["cause", outcome?.failureCauseDiagnostic ?? failure?.message ?? outcome?.message],
 	];
-	return fields
-		.map(([name, value]) => `${name}=${(value === undefined ? "" : sanitizeDiagnostic(value)) || "unknown"}`)
-		.join(" ");
+	// gajae-code keeps the real failure text only in its local log, keyed by
+	// commandId/turnId (`SDK invocation failed`). Without them a redacted
+	// `internal: Prompt submission failed.` cannot be joined to its cause.
+	const correlation: [string, string | undefined][] = [
+		["command", status.status.commandId],
+		["turn", status.status.turnId],
+	];
+	return [
+		...fields.map(([name, value]) => `${name}=${(value === undefined ? "" : sanitizeDiagnostic(value)) || "unknown"}`),
+		...correlation.flatMap(([name, value]) => {
+			const token = value?.replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64);
+			return token ? [`${name}=${token}`] : [];
+		}),
+	].join(" ");
 }
 
 /** A tool name bound for a log field and a chat notice: one token, bounded. */

@@ -11,4 +11,6 @@ The first command returns immediately. A detached supervisor then restarts the g
 
 Do not chain the service-manager commands yourself. When run inline, the sequence stops at the gateway and leaves the adapters on the old binary. On macOS the supervisor runs `launchctl kickstart -k gui/$(id -u)/<label>` for each label. Never use `launchctl bootout`: it removes the job and can leave the bot offline with no automatic recovery.
 
+A host without a service manager (a container with no `systemd-run`) cannot run the supervisor: the command fails at once, and `--status` reads `failed` with a `detail:` line instead of staying `queued`. Restart such a host through whatever supervises it (for example its container runtime); do not retry restart-stack there.
+
 A PID that changed does not prove the intended configuration loaded. After `ok`, still verify service health and a real request path.

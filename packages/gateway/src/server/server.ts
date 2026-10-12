@@ -73,7 +73,7 @@ import {
 	type PersonaTurnSettledInput,
 	type PersonaTurnStartInput,
 } from "../orchestrator/persona-session";
-import { formatFailureNotice, sanitizeDiagnostic } from "../orchestrator/rebind";
+import { formatFailureChatNotice, formatFailureNotice, sanitizeDiagnostic } from "../orchestrator/rebind";
 import type { SessionPort } from "../orchestrator/session-port";
 import { deterministicInterimDeliveryId, deterministicTerminalDeliveryId } from "../orchestrator/tail-runner";
 import { laneLastCommits, WorkLaneManager } from "../orchestrator/work-lane";
@@ -2705,7 +2705,7 @@ async function createInboundTurnLifecycle(
 				const notice = runtime.delivery.prepare(
 					turnId,
 					origin,
-					failureNotice,
+					formatFailureChatNotice(error),
 					undefined,
 					deterministicTerminalDeliveryId(key, input.turn.triggerMessageId, 0),
 				);
