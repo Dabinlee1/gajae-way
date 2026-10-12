@@ -1,7 +1,5 @@
 # Docker Compose configuration for gajae-way runtime
-# Usage: docker compose up (after running: docker compose run -it gajaeway setup)
-
-version: '3.8'
+# Usage: docker compose up (after running: docker compose run -it setup gajaeway setup)
 
 services:
   gajaeway-gateway:
@@ -26,8 +24,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    depends_on:
-      - setup-check
 
   # Adapter services (only enabled ones start; see .env.example or setup output)
   gajaeway-discord:
