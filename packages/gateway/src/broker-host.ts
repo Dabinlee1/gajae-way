@@ -8,8 +8,41 @@ import { BROKER_ENV_PROTECTED_KEYS, LIVE_BROKER_ENV_KEYS, resolveBrokerAgentSour
 import { assertAgentDirectory, BrokerAgentError, recoverProvision } from "./broker-agent/provision";
 import type { GatewayConfig } from "./config";
 import { GJC_ATTACH_ONLY_ENV, readPinnedGjcVersion } from "./orchestrator/broker";
+import { judgeBrokerLiveness, type PidAliveProbe } from "./orchestrator/broker-liveness";
 
 const BROKER_ENV_FILE = "broker.env";
+
+export interface BrokerWatchdogConfig {
+	/** Milliseconds to wait after broker startup before starting checks. */
+	startupGraceMs?: number;
+	/** Interval between broker liveness probes. */
+	probeIntervalMs?: number;
+	/** Number of consecutive probe failures before terminating the broker. */
+	failureThreshold?: number;
+	/** Grace period after SIGTERM before sending SIGKILL. */
+	killGraceMs?: number;
+	/** Probe function for checking if a process is alive. */
+	isPidAlive?: PidAliveProbe;
+}
+
+const DEFAULT_WATCHDOG_CONFIG: Required<BrokerWatchdogConfig> = {
+	startupGraceMs: 10_000,
+	probeIntervalMs: 5_000,
+	failureThreshold: 3,
+	killGraceMs: 5_000,
+	isPidAlive: defaultPidAlive,
+};
+
+function defaultPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+		if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+		throw error;
+	}
+}
 
 export async function runBrokerHost(config: GatewayConfig): Promise<number> {
 	let lease: Lease;
@@ -144,11 +177,12 @@ async function versionOf(exe: string, env: NodeJS.ProcessEnv, cwd: string): Prom
 	return (stdout || stderr).match(/\b(\d+\.\d+\.\d+)\b/)?.[1];
 }
 
-async function runForegroundBroker(
+export async function runForegroundBroker(
 	exe: string,
 	agentDir: string,
 	env: NodeJS.ProcessEnv,
 	cwd: string,
+	watchdogConfig?: BrokerWatchdogConfig,
 ): Promise<number> {
 	const args = [exe, "sdk", "broker", "run", "--agent-dir", agentDir];
 	const child = Bun.spawn(args, { cwd, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
@@ -163,6 +197,10 @@ async function runForegroundBroker(
 	};
 	process.on("SIGTERM", forward);
 	process.on("SIGINT", forward);
+
+	const config = { ...DEFAULT_WATCHDOG_CONFIG, ...watchdogConfig };
+	const watchdog = startBrokerWatchdog(child, agentDir, config);
+
 	try {
 		const exitCode = await child.exited;
 		console.log(`broker_host_child_exit pid=${child.pid} code=${exitCode}`);
@@ -170,5 +208,102 @@ async function runForegroundBroker(
 	} finally {
 		process.off("SIGTERM", forward);
 		process.off("SIGINT", forward);
+		watchdog.stop();
+	}
+}
+
+function startBrokerWatchdog(
+	child: ReturnType<typeof Bun.spawn>,
+	agentDir: string,
+	config: Required<BrokerWatchdogConfig>,
+): { stop(): void } {
+	const discoveryPath = join(agentDir, "sdk", "broker.json");
+	let failureCount = 0;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let killed = false;
+
+	const probe = async () => {
+		if (child.exitCode !== null || child.signalCode !== null) {
+			// Child has exited; stop watching.
+			return;
+		}
+
+		const verdict = await judgeBrokerLiveness(discoveryPath, config.isPidAlive);
+
+		// Only consider a verdict if the discovery reports our exact child pid.
+		if (verdict.state === "live") {
+			// Broker is responding normally.
+			failureCount = 0;
+			return;
+		}
+
+		// Check if there's a discovery record and verify the pid matches.
+		try {
+			const raw = JSON.parse(await readFile(discoveryPath, "utf8"));
+			if (raw && typeof raw === "object" && (raw as Record<string, unknown>).pid !== child.pid) {
+				// Different pid in discovery; don't signal.
+				return;
+			}
+		} catch {
+			// Discovery file missing or unparseable; proceed with failure count.
+		}
+
+		// Broker is either absent or wedged.
+		failureCount++;
+
+		if (failureCount >= config.failureThreshold) {
+			if (!killed) {
+				killed = true;
+				console.log(`broker_host_wedged pid=${child.pid} failures=${failureCount}`);
+				awaitTerminateWedgedBroker(child, config.killGraceMs);
+			}
+		}
+	};
+
+	const schedule = () => {
+		if (child.exitCode !== null || child.signalCode !== null) {
+			return;
+		}
+		timer = setTimeout(() => {
+			probe().catch(() => {
+				// Probe errors do not escalate; just retry next interval.
+			});
+			schedule();
+		}, config.probeIntervalMs);
+	};
+
+	// Start after grace period.
+	timer = setTimeout(schedule, config.startupGraceMs);
+
+	return {
+		stop() {
+			if (timer) {
+				clearTimeout(timer);
+				timer = undefined;
+			}
+		},
+	};
+}
+
+async function awaitTerminateWedgedBroker(child: ReturnType<typeof Bun.spawn>, graceMs: number): Promise<void> {
+	try {
+		child.kill("SIGTERM");
+	} catch {
+		// Child may have already exited.
+	}
+
+	const deadline = Date.now() + graceMs;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null || child.signalCode !== null) {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+
+	// Grace period expired; send SIGKILL.
+	try {
+		child.kill("SIGKILL");
+	} catch {
+		// Child may have exited just as we tried to kill it.
 	}
 }

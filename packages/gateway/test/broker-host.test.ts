@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireLease, homeLayout } from "@gajae-gateway/home";
 import { credentialFingerprint } from "../src/broker-agent/agent-db";
@@ -316,5 +316,43 @@ describe("foreground broker host", () => {
 		child.kill("SIGTERM");
 		expect(await child.exited).toBe(23);
 		expect(await readFile(fake.termPath, "utf8")).toBe("forwarded");
+	});
+});
+
+describe("broker watchdog", () => {
+	test("watchdog config is injectable", async () => {
+		// Verify that the watchdog can be configured with custom parameters
+		const f = await fixture();
+		await provision(f);
+		await installFakeGjc(f);
+
+		const env = {
+			HOME: process.env.HOME ?? homedir(),
+			PATH: process.env.PATH ?? "",
+			LANG: process.env.LANG ?? "C",
+			GJC_CODING_AGENT_DIR: f.agentDir,
+			GJC_SDK_BROKER_AUTOSTART: "0",
+		};
+
+		const fakeExe = homeLayout(f.home).gjcExecutable();
+		// The watchdog config is passed to runForegroundBroker (via runBrokerHost)
+		// This test verifies it accepts the config without crashing
+		const watchdogConfig = {
+			startupGraceMs: 100,
+			probeIntervalMs: 50,
+			failureThreshold: 2,
+			killGraceMs: 200,
+			isPidAlive: () => true,
+		};
+
+		// Import the runForegroundBroker function
+		const brokerHostModule = await import("../src/broker-host");
+
+		// This will run the broker with the custom watchdog config
+		// Since isPidAlive always returns true, watchdog should not try to kill
+		const exitCode = await brokerHostModule.runForegroundBroker(fakeExe, f.agentDir, env, f.home, watchdogConfig);
+
+		// Fake gjc exits cleanly with code 0
+		expect(exitCode).toBe(0);
 	});
 });
