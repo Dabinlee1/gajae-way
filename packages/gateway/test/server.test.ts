@@ -933,7 +933,7 @@ test("large memory.audit and concurrent progress remain independently parseable 
 	expect(auditResponse).toBeDefined();
 	expect(auditResponse?.result?.opRef).toBeDefined();
 	const opRef = (auditResponse?.result as { opRef: string }).opRef;
-	
+
 	// Poll for the audit result via memory.status
 	let auditStatus: any;
 	for (let attempt = 0; attempt < 200; attempt++) {
@@ -949,7 +949,7 @@ test("large memory.audit and concurrent progress remain independently parseable 
 	expect(auditStatus).toBeDefined();
 	expect(auditStatus?.status).toBe("completed");
 	expect(auditStatus?.result).toBeDefined();
-	
+
 	// Verify the audit result contains large data (the issues list is comprehensive)
 	const auditResultJson = JSON.stringify(auditStatus.result);
 	expect(Buffer.byteLength(auditResultJson, "utf8")).toBeGreaterThan(219_000);
