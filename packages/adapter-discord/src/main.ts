@@ -882,12 +882,27 @@ export function isPresenceReaction(unicode: string): boolean {
 	return PRESENCE_ALL_MARKERS.some((marker) => marker.unicode.replace(/\uFE0F/g, "") === bare);
 }
 
+function endDiscordWorkingState(
+	conversationId: string,
+	status: Pick<WorkingStatus, "clear"> | undefined,
+	typing: TypingPort | undefined,
+	log: Pick<Console, "error"> = console,
+): void {
+	typing?.end(conversationId);
+	if (!status) return;
+	void status
+		.clear(conversationId)
+		.catch((error) =>
+			log.error(`Discord working status clear failed: ${error instanceof Error ? error.message : String(error)}`),
+		);
+}
+
 export async function settleDiscordDelivery(
 	gateway: Pick<GatewayClientLike, "request">,
 	discord: DiscordClientLike,
 	message: ChatMessagePayload,
-	_typing?: TypingPort,
-	_status?: WorkingStatus,
+	typing?: TypingPort,
+	status?: WorkingStatus,
 	reactions: DiscordReactionPorts = createReactionPorts(),
 	speech?: DiscordSpeechPorts,
 ): Promise<void> {
@@ -908,13 +923,18 @@ export async function settleDiscordDelivery(
 			// deleted target from failing the whole delivery.
 			const chunk = chunks[index] as string;
 			// A reply reference points into the thread, so it is dropped on parent fallback.
-			if (index === 0 && message.replyToMessageId && !notice)
-				await channel.send({
-					content: chunk,
-					reply: { messageReference: message.replyToMessageId, failIfNotExists: false },
-				});
-			else await channel.send(chunk);
+			try {
+				if (index === 0 && message.replyToMessageId && !notice)
+					await channel.send({
+						content: chunk,
+						reply: { messageReference: message.replyToMessageId, failIfNotExists: false },
+					});
+				else await channel.send(chunk);
+			} finally {
+				if (!message.final) typing?.refresh(message.origin.conversationId);
+			}
 		}
+		if (message.final) endDiscordWorkingState(message.origin.conversationId, status, typing);
 		// Voice rides AFTER the text, and only after the text actually landed:
 		// pairing them is for a readable history, so the readable half must be
 		// the one that is guaranteed. A synthesis failure is logged and the
@@ -922,6 +942,7 @@ export async function settleDiscordDelivery(
 		if (message.voiceText && speech) await sendVoiceMessage(channel, message.voiceText, speech);
 		await gateway.request("delivery.confirm", { deliveryId });
 	} catch (error) {
+		if (message.final) endDiscordWorkingState(message.origin.conversationId, status, typing);
 		await gateway.request("delivery.fail", {
 			deliveryId,
 			reason: error instanceof Error ? error.message : String(error),
@@ -1050,19 +1071,19 @@ export function subscribeDiscordProgress(
 ): () => void {
 	if (!gateway.onChatProgress) return () => {};
 	return gateway.onChatProgress((progress) => {
-		// `final` means the turn stopped working. It arrives even when the turn
-		// delivered nothing - a silence token in an open channel - which is the only
-		// signal that the temporary status must go. Clearing on delivery alone left
-		// one orphaned "working" message per suppressed turn, and the typing hint
-		// (begun on engagement, ended only by a delivery) "typing…" for its full
-		// 330s cap after every silent turn (집가재, 2026-09-02).
-		if (progress.final) typing?.end(progress.origin.conversationId);
-		const action = progress.final ? status.clear(progress.origin.conversationId) : status.update(progress);
-		void action.catch((error) =>
-			log.error(
-				`Discord working status ${progress.final ? "clear" : "update"} failed: ${error instanceof Error ? error.message : String(error)}`,
-			),
-		);
+		// A final tick is unconditional, including silent turns. Terminal delivery
+		// settlement also clears commands without progress and replayed replies.
+		if (progress.final) {
+			// The chat.send response may have resolved earlier in this same read batch.
+			// Let its continuation arm typing/status before applying this terminal tick.
+			queueMicrotask(() => endDiscordWorkingState(progress.origin.conversationId, status, typing, log));
+			return;
+		}
+		void status
+			.update(progress)
+			.catch((error) =>
+				log.error(`Discord working status update failed: ${error instanceof Error ? error.message : String(error)}`),
+			);
 	});
 }
 
