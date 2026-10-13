@@ -810,7 +810,7 @@ test("two consecutive internal submission failures reset the next inbound to a n
 	expect(third).toMatchObject({ sessionId: "session-e1", text: "submission-3" });
 });
 
-test("two consecutive internal submission failures without startedAt (real SDK behavior) reset the next inbound to a new epoch", async () => {
+test("an agent-runtime submission failure without startedAt resets its session once after the safe retry", async () => {
 	const port = new ScriptedSessionPort({
 		onBind: (input) => `session-e${input.epoch}`,
 		onSend: (input, scripted) =>
@@ -826,11 +826,15 @@ test("two consecutive internal submission failures without startedAt (real SDK b
 	const first = await settleFailedInbound(port, "submission-1");
 	const second = await settleFailedInbound(port, "submission-2");
 	expect(first.sessionId).toBe("session-e0");
-	expect(second.sessionId).toBe(first.sessionId);
+	expect(second.sessionId).toBe("session-e1");
 	expect(database?.bindings.getSessionRecord(KEY)?.epoch).toBe(1);
 	expect(logs).toContain(
-		`session_reset_after_failed_turn origin=${KEY} epoch=0 nextEpoch=1 opRef=${second.opRef} reason=repeated_submission_failure`,
+		`session_reset_after_failed_turn origin=${KEY} epoch=0 nextEpoch=1 opRef=${first.opRef} reason=submission_wedged`,
 	);
+	expect(logs).not.toContain(
+		`session_reset_after_failed_turn origin=${KEY} epoch=1 nextEpoch=2 opRef=${second.opRef} reason=submission_wedged`,
+	);
+	expect(logs.some((line) => line.startsWith("failed_turn_reset_capped ") && line.includes(second.opRef))).toBe(true);
 
 	const third = await settleFailedInbound(port, "submission-3");
 	expect(third).toMatchObject({ sessionId: "session-e1", text: "submission-3" });
@@ -1075,13 +1079,13 @@ test("a wedged submission resets the next binding once without transcript eviden
 	await eventually(() => port.sends.length === 2, "wedged submission was not re-sent");
 	const retry = port.sends[1]!;
 	expect(retry).toMatchObject({ text: "first", sessionId: "session-e0" });
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(0);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(0);
 	expect(failures).toEqual([]);
 	port.fail(retry.opRef, "Prompt submission failed.", { code: "internal", outcome: WEDGED_SUBMISSION });
 	await eventually(() => manager!.state(KEY) === "idle", "wedged submission did not settle");
 	expect(port.failureEvidenceProbes).toEqual([]);
 	expect(failures).toEqual(["internal: Prompt submission failed."]);
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(1);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(1);
 	expect(logs.some((line) => line.includes("reason=submission_wedged"))).toBe(true);
 	enqueue("next", "second");
 	await manager!.notifyInbound(KEY);
@@ -1092,7 +1096,7 @@ test("a wedged submission resets the next binding once without transcript eviden
 	await eventually(() => port.sends.length === 4, "capped wedge was not re-sent");
 	port.fail(port.sends[3]!.opRef, "Prompt submission failed.", { code: "internal", outcome: WEDGED_SUBMISSION });
 	await eventually(() => manager!.state(KEY) === "idle", "capped wedge did not settle");
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(1);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(1);
 });
 
 for (const [label, detail] of [
@@ -1115,7 +1119,7 @@ for (const [label, detail] of [
 			port.fail(port.sends[1]!.opRef, "failed", detail);
 		}
 		await eventually(() => manager!.state(KEY) === "idle", "failure did not settle");
-		expect(database!.getSessionRecord(KEY)?.epoch).toBe(0);
+		expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(0);
 	});
 
 for (const missing of ["start", "terminal", "nan", "reversed", "future", "op-ref"] as const)
@@ -1948,7 +1952,7 @@ async function wedgedHarness(port: WedgedSessionPort) {
 	await manager?.notifyInbound(KEY);
 	await eventually(() => port.sends.length === 1, "turn did not start");
 	const first = port.sends[0]!;
-	expect(database?.inboundTurnRow(first.opRef)?.turn_state).toBe("accepted");
+	expect(database?.inbox.turnRow(first.opRef)?.turn_state).toBe("accepted");
 	return { clock, logs, terminal, recorded, failures, first };
 }
 
@@ -1968,13 +1972,13 @@ test("case A: an ACCEPTED turn on a live session idle past the bound with status
 	}
 	expect(logs.some((line) => line.includes("reason=status_unavailable") && line.includes(first.opRef))).toBe(true);
 	expect(logs.some((line) => line.startsWith("wedged_turn_released"))).toBe(false);
-	expect(database?.inboundTurnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
+	expect(database?.inbox.turnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
 	expect(port.closes).toHaveLength(0);
 	expect(terminal).toEqual([]);
 
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "wedged turn was not released");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "wedged turn was not released");
 	const released = logs.filter((line) => line.startsWith("wedged_turn_released"));
 	expect(released).toHaveLength(1);
 	expect(released[0]).toContain(`opRef=${first.opRef}`);
@@ -1990,7 +1994,7 @@ test("case A: an ACCEPTED turn on a live session idle past the bound with status
 		true,
 	);
 	expect(port.sends).toHaveLength(1);
-	expect(database?.getSessionRecord(KEY)?.epoch).toBe(1);
+	expect(database?.bindings.getSessionRecord(KEY)?.epoch).toBe(1);
 
 	// A later sweep delivers nothing again; the next inbound binds a fresh epoch.
 	await manager!.tick(KEY);
@@ -2009,7 +2013,7 @@ test("case A with nothing in the transcript is closed with the cut-off notice, h
 	port.setActivity(first.sessionId, "idle");
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "wedged turn was not released");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "wedged turn was not released");
 	expect(logs.some((line) => line.startsWith("wedged_turn_released") && line.includes("delivered=false"))).toBe(true);
 	expect(terminal).toEqual([]);
 	expect(failures).toHaveLength(1);
@@ -2025,7 +2029,7 @@ test("case A shape with an in_flight status: released past the bound like an unr
 	port.setActivity(first.sessionId, "idle");
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "wedged turn was not released");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "wedged turn was not released");
 	expect(logs.some((line) => line.startsWith("wedged_turn_released") && line.includes("reason=status_in_flight"))).toBe(
 		true,
 	);
@@ -2057,11 +2061,11 @@ test("case B: terminal_ok whose output stays pending past the bound delivers the
 	clock.offsetMs = WEDGED_TURN_IDLE_MS - MINUTE;
 	await manager!.tick(KEY);
 	expect(logs.some((line) => line.startsWith("wedged_turn_released"))).toBe(false);
-	expect(database?.inboundTurnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
+	expect(database?.inbox.turnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
 
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
 	expect(terminal).toEqual(["the real answer"]);
 	expect(failures).toEqual([]);
 	expect(
@@ -2074,7 +2078,7 @@ test("case B: terminal_ok whose output stays pending past the bound delivers the
 	).toBe(true);
 	// A healthy host is not killed and the binding is kept.
 	expect(port.closes).toHaveLength(0);
-	expect(database?.getSessionRecord(KEY)?.epoch).toBe(0);
+	expect(database?.bindings.getSessionRecord(KEY)?.epoch).toBe(0);
 	expect(logs.some((line) => line.startsWith("accepted_turn_closed"))).toBe(false);
 	await manager!.tick(KEY);
 	expect(terminal).toHaveLength(1);
@@ -2087,7 +2091,7 @@ test("case B with only [SILENT] in the transcript is completed with no post", as
 	port.appendAssistant(first.sessionId, "[SILENT]");
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
 	// The lifecycle sees the silence token (it suppresses delivery), never a spoken text.
 	expect(terminal.every((text) => isSilenceToken(text))).toBe(true);
 	expect(failures).toEqual([]);
@@ -2099,16 +2103,18 @@ test("a wedged answer already confirmed delivered to the origin is not posted ag
 	const port = new WedgedSessionPort({ onBind: (input) => `session-e${input.epoch}` });
 	const { clock, logs, terminal, recorded, failures, first } = await caseB(port);
 	port.appendAssistant(first.sessionId, "already posted");
-	database!.deliveryCreate({
-		id: "delivery-earlier",
-		turnId: "turn-earlier",
-		originKey: KEY,
-		payloadJson: JSON.stringify({ origin: ORIGIN, role: "assistant", text: "already posted", final: true }),
+	database!.transaction((tx) => {
+		database!.outbox.create(tx, {
+			deliveryId: "delivery-earlier",
+			turnId: "turn-earlier",
+			originKey: KEY,
+			payloadJson: JSON.stringify({ origin: ORIGIN, role: "assistant", text: "already posted", final: true }),
+		});
+		database!.outbox.confirm(tx, "delivery-earlier");
 	});
-	database!.deliveryUpdate("delivery-earlier", "confirmed");
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
 	// Handed to the lifecycle only to be recorded (and its presentation ended), never posted.
 	expect(terminal).toEqual([]);
 	expect(recorded).toEqual(["already posted"]);
@@ -2121,7 +2127,7 @@ test("case B with nothing in the transcript is completed with a failure notice i
 	const { clock, logs, terminal, failures, first } = await caseB(port);
 	clock.offsetMs = WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "case B turn was not completed");
 	expect(terminal).toEqual([]);
 	expect(failures).toHaveLength(1);
 	expect(failures[0]).toContain("output_unavailable");
@@ -2141,7 +2147,7 @@ test("a live session that is busy (not idle) past the bound is never released", 
 		await manager!.tick(KEY);
 	}
 	expect(logs.some((line) => line.startsWith("wedged_turn_released"))).toBe(false);
-	expect(database?.inboundTurnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
+	expect(database?.inbox.turnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
 	expect(port.closes).toHaveLength(0);
 	expect(terminal).toEqual([]);
 });
@@ -2162,7 +2168,7 @@ test("an unanswerable liveness probe is not wedge evidence: the turn stays held"
 	clock.offsetMs = 3 * WEDGED_TURN_IDLE_MS;
 	await manager!.tick(KEY);
 	expect(logs.some((line) => line.startsWith("wedged_turn_released"))).toBe(false);
-	expect(database?.inboundTurnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
+	expect(database?.inbox.turnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
 	expect(port.closes).toHaveLength(0);
 });
 
@@ -2174,13 +2180,13 @@ test("a throwing liveness probe on a terminal_ok turn with pending output keeps 
 	clock.offsetMs = 3 * WEDGED_TURN_IDLE_MS;
 	await manager!.tick(KEY);
 	expect(logs.some((line) => line.startsWith("wedged_turn_released"))).toBe(false);
-	expect(database?.inboundTurnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
+	expect(database?.inbox.turnRow(first.opRef)).toMatchObject({ state: "pending", turn_state: "accepted" });
 	expect(terminal).toEqual([]);
 	// Once the probe answers again the same turn is released on a later sweep.
 	port.livenessFails = false;
 	clock.offsetMs = 3 * WEDGED_TURN_IDLE_MS + MINUTE;
 	await manager!.tick(KEY);
-	await eventually(() => database?.inboundTurnRow(first.opRef)?.turn_state === "done", "turn was not released");
+	await eventually(() => database?.inbox.turnRow(first.opRef)?.turn_state === "done", "turn was not released");
 	expect(terminal).toEqual(["the real answer"]);
 });
 
@@ -2590,7 +2596,7 @@ test("가8: the first message after the host closed itself resumes the same sess
 	await eventually(() => port.sends.length === 2, "message after idle was not sent");
 	expect(port.resumeCalls).toBe(1);
 	expect(port.sends[1]).toMatchObject({ sessionId, text: "결론?" });
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(0);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(0);
 	expect(logs.some((line) => line.startsWith("session_resumed") && line.includes(`session=${sessionId}`))).toBe(true);
 	port.complete(port.sends[1]!.opRef, "이어서 답");
 	await eventually(() => terminal.length === 2, "resumed turn did not deliver");
@@ -2604,13 +2610,13 @@ test("가8: a send that hits the closed host is recovered by resume on the same 
 	await manager!.notifyInbound(KEY).catch(() => undefined);
 	expect(port.sends).toHaveLength(1);
 	const opRef = latestOpRef;
-	expect(database!.inboundTurnRow(opRef)).toMatchObject({ state: "pending", turn_state: "bound" });
+	expect(database!.inbox.turnRow(opRef)).toMatchObject({ state: "pending", turn_state: "bound" });
 
 	await manager!.recover();
 	await eventually(() => port.sends.length === 2, "recovered turn was not re-sent");
 	expect(port.resumeCalls).toBe(1);
 	expect(port.sends[1]).toMatchObject({ sessionId, text: "작업다됨?" });
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(0);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(0);
 	expect(
 		logs.some(
 			(line) =>
@@ -2625,7 +2631,7 @@ test("가8: a send that hits the closed host is recovered by resume on the same 
 	await manager!.tick(KEY);
 	expect(port.sends).toHaveLength(2);
 	expect(terminal).toEqual(["earlier answer", "응 다 됐어"]);
-	expect(database!.inboundPendingCount(KEY)).toBe(0);
+	expect(database!.inbox.pendingCount(KEY)).toBe(0);
 });
 
 test("가8: a failed resume falls back to the existing rebind onto a new epoch", async () => {
@@ -2643,7 +2649,7 @@ test("가8: a failed resume falls back to the existing rebind onto a new epoch",
 	expect(logs.some((line) => line.startsWith("recovery_requeue_unaccepted") && line.includes("nextEpoch=1"))).toBe(
 		true,
 	);
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(1);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(1);
 	expect(port.sends[1]).toMatchObject({ sessionId: "session-e1", text: "결론" });
 });
 
@@ -2656,7 +2662,7 @@ test("가8: a deleted saved session is never resumed", async () => {
 	await manager!.recover();
 	await eventually(() => port.sends.length === 2, "rebound turn was not sent");
 	expect(port.resumeCalls).toBe(0);
-	expect(database!.getSessionRecord(KEY)?.epoch).toBe(1);
+	expect(database!.bindings.getSessionRecord(KEY)?.epoch).toBe(1);
 	expect(port.sends[1]!.sessionId).not.toBe(sessionId);
 });
 
@@ -3081,10 +3087,10 @@ async function preambleHarness(
 	log?: (line: string) => void,
 ): Promise<void> {
 	home = await mkdtemp(join(tmpdir(), "gajaeway-persona-preamble-"));
-	database = await GatewayDatabase.open(join(home, "gateway.db"));
+	database = await Store.open(join(home, "gateway.db"));
 	registerFixtureBindings(port);
 	manager = new PersonaSessionManager({
-		database,
+		database: database!,
 		port,
 		instanceId: "instance-test",
 		repo: join(home, "workspace"),

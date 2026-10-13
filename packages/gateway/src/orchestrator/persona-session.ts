@@ -38,6 +38,7 @@ import {
 	type SessionContextUsage,
 	type SessionLiveness,
 	type SessionPort,
+	type TerminateHostOutcome,
 	spokenParts,
 } from "./session-port";
 import {
@@ -2402,7 +2403,7 @@ class OriginActor {
 	async #wedgedIdleMs(bound: BoundTurn, supplied?: SessionLiveness): Promise<number | undefined> {
 		const port = this.#manager.port;
 		if (!port.liveness) return undefined;
-		if (this.#manager.database.inboundTurnRow(bound.turn.opRef)?.turn_state !== "accepted") return undefined;
+		if (this.#manager.database.inbox.turnRow(bound.turn.opRef)?.turn_state !== "accepted") return undefined;
 		const now = this.#manager.now();
 		if (bound.dispatchedAtMs !== undefined && now - bound.dispatchedAtMs < WEDGED_TURN_IDLE_MS) return undefined;
 		let probe = supplied;

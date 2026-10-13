@@ -682,9 +682,10 @@ async function resumeHarness(options: {
 	transcript?: boolean;
 }) {
 	home = await mkdtemp(join(tmpdir(), "gajaeway-session-port-"));
-	database = await Store.open(join(home, "gateway.db"));
+	const db = await Store.open(join(home, "gateway.db"));
+	database = db;
 	const agentDir = join(home, "agent");
-	const authority = initializeTestBrokerAuthority(database, agentDir);
+	const authority = initializeTestBrokerAuthority(db, agentDir);
 	const repo = join(home, "workspace");
 	const state = { live: false, host: "darwin:1790891855:142007" };
 	let transcript: string | undefined;
@@ -719,12 +720,12 @@ async function resumeHarness(options: {
 	};
 	const port = new BrokerSessionPort({
 		authority,
-		database,
+		database: db,
 		cli: run,
 		instanceId: "instance-1",
 		tailRunner: new TailRunner({ stream: noRelay, repo }),
 	});
-	await createOwnedSessionFixture(database, authority, {
+	await createOwnedSessionFixture(db, authority, {
 		sessionId: "saved-1",
 		repo,
 		originKey: "discord/channel/c",
@@ -826,8 +827,8 @@ test("가8: no unique saved transcript means no resume request at all", async ()
 
 test("가8: broker SessionPort resumes a gjc >= 0.16 session whose locator has only cwd, and refuses deleted or foreign ones", async () => {
 	home = await mkdtemp(join(tmpdir(), "gajaeway-session-port-"));
-	database = await GatewayDatabase.open(join(home, "gateway.db"));
-	const authority = initializeTestBrokerAuthority(database, join(home, "agent"));
+	database = await Store.open(join(home, "gateway.db"));
+	const authority = initializeTestBrokerAuthority(database!, join(home, "agent"));
 	const repo = join(home, "workspace");
 	await mkdir(join(home, "agent", "sessions", "v2-scope"), { recursive: true });
 	await writeFile(join(home, "agent", "sessions", "v2-scope", "2026-10-01T00-00-00-000Z_saved-1.jsonl"), "{}\n");
@@ -861,12 +862,12 @@ test("가8: broker SessionPort resumes a gjc >= 0.16 session whose locator has o
 	};
 	const port = new BrokerSessionPort({
 		authority,
-		database,
+		database: database!,
 		cli: run,
 		instanceId: "instance-1",
 		tailRunner: new TailRunner({ stream: noRelay, repo }),
 	});
-	await createOwnedSessionFixture(database, authority, {
+	await createOwnedSessionFixture(database!, authority, {
 		sessionId: "saved-1",
 		repo,
 		originKey: "discord/channel/c",
@@ -1125,7 +1126,7 @@ test("fetchAssistantSince follows transcript continuation pages and returns the 
 
 test("fetchAssistantSince with preferSpoken skips a trailing silent row for the last spoken answer", async () => {
 	const home = await mkdtemp(join(tmpdir(), "gajaeway-session-port-spoken-"));
-	const database = await GatewayDatabase.open(join(home, "gateway.db"));
+	const database = await Store.open(join(home, "gateway.db"));
 	const authority = initializeTestBrokerAuthority(database, join(home, "agent"));
 	const floor = Date.now();
 	let items: Array<{ role: string; ts: string; body: string }> = [];
@@ -1178,17 +1179,17 @@ test("fetchAssistantSince with preferSpoken skips a trailing silent row for the 
 
 test("liveness carries the host's activity {state, at} from session inspect, and omits a malformed one", async () => {
 	home = await mkdtemp(join(tmpdir(), "gajaeway-session-port-activity-"));
-	database = await GatewayDatabase.open(join(home, "gateway.db"));
-	const authority = initializeTestBrokerAuthority(database, join(home, "agent"));
+	database = await Store.open(join(home, "gateway.db"));
+	const authority = initializeTestBrokerAuthority(database!, join(home, "agent"));
 	const repo = join(home, "workspace");
-	await createOwnedSessionFixture(database, authority, { sessionId: "owned", originKey: "origin", epoch: 0, repo });
+	await createOwnedSessionFixture(database!, authority, { sessionId: "owned", originKey: "origin", epoch: 0, repo });
 	let session: Record<string, unknown> = {};
 	const run: CliRunner = async (args) => {
 		if (!args.includes("inspect")) throw new Error(`unexpected command ${args.join(" ")}`);
 		return { exitCode: 0, stdout: JSON.stringify({ ok: true, result: { session } }), stderr: "" };
 	};
 	const port = new BrokerSessionPort({
-		database,
+		database: database!,
 		authority,
 		cli: run,
 		instanceId: "activity",
@@ -1850,10 +1851,10 @@ test("splitThinkingSuffix separates a trailing thinking level and leaves other c
 
 test("contextUsage reads context.get usage from the relay's query page", async () => {
 	home = await mkdtemp(join(tmpdir(), "gajaeway-session-port-"));
-	database = await GatewayDatabase.open(join(home, "gateway.db"));
-	const authority = initializeTestBrokerAuthority(database, join(home, "agent"));
+	database = await Store.open(join(home, "gateway.db"));
+	const authority = initializeTestBrokerAuthority(database!, join(home, "agent"));
 	const repo = join(home, "workspace");
-	await createOwnedSessionFixture(database, authority, {
+	await createOwnedSessionFixture(database!, authority, {
 		sessionId: "sdk-1",
 		repo,
 		originKey: "context-usage",
@@ -1876,7 +1877,7 @@ test("contextUsage reads context.get usage from the relay's query page", async (
 		return reply as ReturnType<Parameters<typeof scriptedRelay>[0]>;
 	});
 	const port = new BrokerSessionPort({
-		database,
+		database: database!,
 		authority,
 		cli: run,
 		instanceId: "instance-1",
@@ -1902,10 +1903,10 @@ test("contextUsage reads context.get usage from the relay's query page", async (
 
 test("runCompaction waits minutes for gjc to finish compacting and maps its receipt", async () => {
 	home = await mkdtemp(join(tmpdir(), "gajaeway-session-port-"));
-	database = await GatewayDatabase.open(join(home, "gateway.db"));
-	const authority = initializeTestBrokerAuthority(database, join(home, "agent"));
+	database = await Store.open(join(home, "gateway.db"));
+	const authority = initializeTestBrokerAuthority(database!, join(home, "agent"));
 	const repo = join(home, "workspace");
-	await createOwnedSessionFixture(database, authority, { sessionId: "sdk-1", repo, originKey: "compact", epoch: 0 });
+	await createOwnedSessionFixture(database!, authority, { sessionId: "sdk-1", repo, originKey: "compact", epoch: 0 });
 	const calls: { args: string[]; timeoutMs: number | undefined }[] = [];
 	let reply: Record<string, unknown> = { ok: true, result: { started: true } };
 	const run: CliRunner = async (args, options) => {
@@ -1913,7 +1914,7 @@ test("runCompaction waits minutes for gjc to finish compacting and maps its rece
 		return { exitCode: 0, stdout: JSON.stringify(reply), stderr: "" };
 	};
 	const port = new BrokerSessionPort({
-		database,
+		database: database!,
 		authority,
 		cli: run,
 		instanceId: "instance-1",

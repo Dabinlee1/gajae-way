@@ -546,7 +546,7 @@ export class BrokerSessionPort implements SessionPort {
 		// selector is applied here rather than deferred to the first turn.
 		if (typeof input.model === "string") {
 			const { thinking } = splitThinkingSuffix(input.model);
-			if (thinking) await this.#setThinking(this.#cliTransport(created.sessionId), thinking);
+			if (thinking) await this.#setThinking(this.#cliTransport(sessionId), thinking);
 		}
 		const persistedEpoch = this.#database.bindings.getSessionRecord(input.originKey)?.epoch;
 		if (persistedEpoch !== undefined && persistedEpoch > input.epoch) {
@@ -1116,7 +1116,7 @@ export class BrokerSessionPort implements SessionPort {
 		relay: TailHandle;
 	}): Promise<SessionContextUsage | undefined> {
 		this.#assertOwned(input);
-		this.#database.assertBrokerAuthority(this.#authority);
+		this.#database.bindings.assertAuthority(this.#authority);
 		const response = await input.relay.query("context.get", {}, { timeoutMs: CONTEXT_QUERY_TIMEOUT_MS });
 		if (!response.ok) return undefined;
 		const items = response.page?.items;
