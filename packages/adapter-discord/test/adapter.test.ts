@@ -439,6 +439,41 @@ test("typing indicator keeps pulsing during interim delivery and stops on final 
 	expect(typingCount).toBe(beforeFinal);
 });
 
+test("an interim voice delivery refreshes typing after posting the voice message", async () => {
+	const events: string[] = [];
+	const ogg = new Uint8Array(27);
+	ogg.set([0x4f, 0x67, 0x67, 0x53]);
+	ogg[6] = 48_000 % 256;
+	ogg[7] = Math.floor(48_000 / 256);
+	const discord: DiscordClientLike = {
+		channels: {
+			fetch: async () => ({
+				send: async (payload: unknown) => void events.push(typeof payload === "string" ? "text" : "voice"),
+			}),
+		},
+	};
+	const typing: TypingPort = {
+		begin: () => {},
+		refresh: () => events.push("typing"),
+		end: () => {},
+	};
+	const requests: Array<{ verb: string; params: unknown }> = [];
+	await settleDiscordDelivery(
+		mockGateway(requests),
+		discord,
+		{ ...delivery("spoken reply"), final: false, voiceText: "spoken reply" },
+		typing,
+		undefined,
+		undefined,
+		{
+			config: { apiKey: "test-key" },
+			ports: { fetch: (async () => new Response(ogg)) as unknown as typeof globalThis.fetch },
+		},
+	);
+	expect(events).toEqual(["text", "typing", "voice", "typing"]);
+	expect(requests).toEqual([{ verb: "delivery.confirm", params: { deliveryId: "delivery-1" } }]);
+});
+
 test("a final progress tick cannot race the presence arm from its chat.send response", async () => {
 	const calls: string[] = [];
 	let emit: ((progress: ChatProgressPayload) => void) | undefined;

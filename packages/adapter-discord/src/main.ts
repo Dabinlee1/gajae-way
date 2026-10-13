@@ -939,7 +939,11 @@ export async function settleDiscordDelivery(
 		// pairing them is for a readable history, so the readable half must be
 		// the one that is guaranteed. A synthesis failure is logged and the
 		// delivery still confirms — the words arrived, which is the deliverable.
-		if (message.voiceText && speech) await sendVoiceMessage(channel, message.voiceText, speech);
+		if (message.voiceText && speech) {
+			await sendVoiceMessage(channel, message.voiceText, speech);
+			// A voice post clears Discord's typing hint just like a text post.
+			if (!message.final) typing?.refresh(message.origin.conversationId);
+		}
 		await gateway.request("delivery.confirm", { deliveryId });
 	} catch (error) {
 		if (message.final) endDiscordWorkingState(message.origin.conversationId, status, typing);
