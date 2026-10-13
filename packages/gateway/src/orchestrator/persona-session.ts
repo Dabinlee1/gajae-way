@@ -38,8 +38,8 @@ import {
 	type SessionContextUsage,
 	type SessionLiveness,
 	type SessionPort,
-	type TerminateHostOutcome,
 	spokenParts,
+	type TerminateHostOutcome,
 } from "./session-port";
 import {
 	deterministicInterimDeliveryId,
