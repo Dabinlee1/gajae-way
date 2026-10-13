@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessagePayload } from "@gajae-gateway/protocol";
@@ -50,6 +50,8 @@ async function fileDelivery(extra: Partial<ChatMessagePayload> = {}): Promise<Ch
 	directory = await mkdtemp(join(tmpdir(), "gajaeway-slack-files-"));
 	const path = join(directory, "report.csv");
 	await writeFile(path, "a,b\n1,2\n");
+	// Match the canonical path the gateway stores in a FileRef.
+	const checkedPath = await realpath(path);
 	return {
 		turnId: "turn",
 		origin: { platform: "slack", kind: "channel", conversationId: "C1" },
@@ -57,7 +59,7 @@ async function fileDelivery(extra: Partial<ChatMessagePayload> = {}): Promise<Ch
 		text: "📎 report.csv",
 		final: false,
 		deliveryId: "file-delivery",
-		file: { path, name: "report.csv", size: 8 },
+		file: { path: checkedPath, name: "report.csv", size: 8 },
 		...extra,
 	};
 }
