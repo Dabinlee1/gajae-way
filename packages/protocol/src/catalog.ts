@@ -414,19 +414,37 @@ export interface SessionBootstrapProjection {
 
 /**
  * Memory system surface (P3, spec fact 8): filesystem-first Markdown memory.
- * memory.audit runs the structural validator; memory.search is map-then-BM25
- * retrieval over the canonical tree. Both are read-only verbs.
- * Tracked operations: long-running verbs (autolink/audit) may return an operation ID
- * if the operation would exceed the client timeout, and the client can poll for results.
+ * memory.audit runs the structural validator; memory.autolink commits canonical
+ * crosslinks; memory.search is map-then-BM25 retrieval over the canonical tree.
+ * Audit and autolink return an operation ID immediately and expose the outcome
+ * through memory.status, so client request timeouts do not imply operation failure.
  */
-export interface MemoryAuditResult {
+export interface MemoryOperationAccepted {
 	readonly opRef: string;
-	readonly ok?: boolean;
-	readonly issues?: readonly {
+}
+
+export interface MemoryAuditResult {
+	readonly ok: boolean;
+	readonly issues: readonly {
 		readonly code: string;
 		readonly path: string;
 		readonly message: string;
 	}[];
+}
+
+export interface MemoryAutolinkResult {
+	readonly filesChanged: number;
+	readonly linksAdded: number;
+	readonly aliases: number;
+	readonly commitSha: string | null;
+	readonly elapsedMs: number;
+}
+
+export interface MemoryOperationStatusResult {
+	readonly status: "pending" | "completed" | "failed";
+	readonly elapsedMs: number;
+	readonly result?: MemoryAuditResult | MemoryAutolinkResult;
+	readonly error?: string;
 }
 
 export interface MemorySearchParams {
@@ -1100,20 +1118,9 @@ export interface VerbCatalogV01 {
 	"session.recall": { params: SessionRecallParams; result: SessionRecallResult };
 	"session.list": { params: undefined; result: SessionListResult };
 	"session.modelChoices": { params: undefined; result: SessionModelChoicesResult };
-	"memory.audit": { params: undefined; result: MemoryAuditResult };
-	"memory.autolink": {
-		params: undefined;
-		result: {
-			readonly opRef: string;
-			readonly filesChanged?: number;
-			readonly linksAdded?: number;
-			readonly aliases?: number;
-		};
-	};
-	"memory.status": {
-		params: { readonly opRef: string };
-		result: { readonly status: "pending" | "completed" | "failed"; readonly result?: unknown; readonly error?: string };
-	};
+	"memory.audit": { params: undefined; result: MemoryOperationAccepted };
+	"memory.autolink": { params: undefined; result: MemoryOperationAccepted };
+	"memory.status": { params: { readonly opRef: string }; result: MemoryOperationStatusResult };
 	"memory.search": { params: MemorySearchParams; result: MemorySearchResult };
 	"monitor.add": { params: MonitorSpec; result: { readonly monitorId: string } };
 	"monitor.update": { params: MonitorUpdateParams; result: { readonly monitorId: string } };

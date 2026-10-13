@@ -306,18 +306,17 @@ async function applyConfigReload(
 export function pruneExpiredMemoryOps(memoryOps: Map<string, MemoryOpStatus>, nowMs: number): void {
 	// Remove expired operations (past their 24h TTL)
 	for (const [opRef, op] of Array.from(memoryOps.entries())) {
-		if (new Date(op.expireAt).getTime() < nowMs) {
+		if (op.status !== "pending" && new Date(op.expireAt).getTime() < nowMs) {
 			memoryOps.delete(opRef);
 		}
 	}
 
 	// Cap the map size to prevent unbounded memory growth
 	if (memoryOps.size > 10_000) {
-		const entries = Array.from(memoryOps.entries()).sort(
-			([, a], [, b]) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime(),
-		);
-		while (entries.length > 5_000) {
-			const [opRef] = entries.shift()!;
+		const entries = Array.from(memoryOps.entries())
+			.filter(([, op]) => op.status !== "pending")
+			.sort(([, a], [, b]) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+		for (const [opRef] of entries.slice(0, memoryOps.size - 5_000)) {
 			memoryOps.delete(opRef);
 		}
 	}
@@ -357,8 +356,33 @@ interface MemoryOpStatus {
 	status: "pending" | "completed" | "failed";
 	result?: unknown;
 	error?: string;
+	elapsedMs?: number;
 	startedAt: string;
 	expireAt: string; // For pruning old operations
+}
+
+function startMemoryOperation(runtime: Runtime, opRef: string, work: () => Promise<unknown>): void {
+	let task: Promise<void>;
+	task = Promise.resolve()
+		.then(work)
+		.then((result) => {
+			const operation = runtime.memoryOps.get(opRef);
+			if (operation) {
+				operation.status = "completed";
+				operation.result = result;
+				operation.elapsedMs = Math.max(0, Date.now() - Date.parse(operation.startedAt));
+			}
+		})
+		.catch((error: unknown) => {
+			const operation = runtime.memoryOps.get(opRef);
+			if (operation) {
+				operation.status = "failed";
+				operation.error = diagnostic(error);
+				operation.elapsedMs = Math.max(0, Date.now() - Date.parse(operation.startedAt));
+			}
+		})
+		.finally(() => runtime.memoryOperationTasks.delete(task));
+	runtime.memoryOperationTasks.add(task);
 }
 
 interface Runtime {
@@ -374,6 +398,8 @@ interface Runtime {
 	readonly memory: MemoryClosureQueue;
 	/** Tracked memory operations (autolink, audit) keyed by opRef. */
 	readonly memoryOps: Map<string, MemoryOpStatus>;
+	/** Running memory operations are drained before gateway shutdown. */
+	readonly memoryOperationTasks: Set<Promise<void>>;
 	readonly registry: MonitorRegistry;
 	readonly monitors: MonitorPropagator;
 	readonly monitorRuntime: MonitorRuntime;
@@ -382,6 +408,7 @@ interface Runtime {
 	readonly panelExpirySweepTimer: ReturnType<typeof setInterval>;
 	readonly stallTimer: ReturnType<typeof setInterval>;
 	readonly contextMaintenanceTimer: ReturnType<typeof setInterval>;
+	readonly memoryOpsCleanupTimer: ReturnType<typeof setInterval>;
 	readonly stopRetention: () => void;
 	readonly stopBrokerGenerationListener?: () => void;
 	/** Per-turn / per-message reaction caps shared by chat.react and the reply-token path. */
@@ -434,6 +461,7 @@ export async function startUnixServer(options: GatewayServerOptions): Promise<Ga
 			clearInterval(runtime.panelExpirySweepTimer);
 			clearInterval(runtime.stallTimer);
 			clearInterval(runtime.contextMaintenanceTimer);
+			clearInterval(runtime.memoryOpsCleanupTimer);
 			runtime.stopRetention();
 			// Stop accepting new sockets first, but keep existing sockets alive. Then
 			// quiesce every admitted producer before taking the final writer snapshot.
@@ -441,6 +469,7 @@ export async function startUnixServer(options: GatewayServerOptions): Promise<Ga
 			runtime.stopBrokerGenerationListener?.();
 			await runtime.work.stop();
 			await Promise.all([...runtime.requests]);
+			await Promise.all([...runtime.memoryOperationTasks]);
 			await runtime.personaSessions.drain();
 			await runtime.personaSessions.stop();
 			await runtime.monitorRuntime.stop();
@@ -553,6 +582,7 @@ export function startStdioServer(options: GatewayServerOptions): GatewayServer {
 			clearInterval(runtime.panelExpirySweepTimer);
 			clearInterval(runtime.stallTimer);
 			clearInterval(runtime.contextMaintenanceTimer);
+			clearInterval(runtime.memoryOpsCleanupTimer);
 			runtime.stopRetention();
 			connection.write({ v: PROFILE_VERSION, type: "event", event: "gateway.stopping", payload: { reason } });
 			runtime.stopBrokerGenerationListener?.();
@@ -560,6 +590,7 @@ export function startStdioServer(options: GatewayServerOptions): GatewayServer {
 			// Same producer quiescence as the Unix server: in-flight stdio requests are
 			// tracked and awaited before persona/tail/broker teardown.
 			await Promise.all([...runtime.requests]);
+			await Promise.all([...runtime.memoryOperationTasks]);
 			await runtime.personaSessions.drain();
 			await runtime.personaSessions.stop();
 			await runtime.monitorRuntime.stop();
@@ -893,6 +924,7 @@ function createRuntime(options: GatewayServerOptions): Runtime {
 		panelExpirySweepTimer,
 		stallTimer,
 		contextMaintenanceTimer,
+		memoryOpsCleanupTimer,
 		stopRetention,
 		...(stopBrokerGenerationListener ? { stopBrokerGenerationListener } : {}),
 		reactions: new ReactionBudget(),
@@ -912,6 +944,7 @@ function createRuntime(options: GatewayServerOptions): Runtime {
 		requests: new Set(),
 		permissionPanels,
 		memoryOps: new Map(),
+		memoryOperationTasks: new Set(),
 	};
 	void work.recover().catch((error: unknown) => console.error(`work startup recovery failed: ${diagnostic(error)}`));
 	void personaSessions
@@ -1462,25 +1495,11 @@ async function handleRequest(
 				return;
 			}
 
-			// Start operation asynchronously; client gets opRef immediately.
-			void (async () => {
-				try {
-					const root = await initializeMemory(options.config.home);
-					const issues = await validateMemory(root);
-					const result = { ok: issues.length === 0, issues };
-					const stored = runtime.memoryOps.get(opRef);
-					if (stored) {
-						stored.status = "completed";
-						stored.result = result;
-					}
-				} catch (error) {
-					const stored = runtime.memoryOps.get(opRef);
-					if (stored) {
-						stored.status = "failed";
-						stored.error = diagnostic(error);
-					}
-				}
-			})();
+			startMemoryOperation(runtime, opRef, async () => {
+				const root = await initializeMemory(options.config.home);
+				const issues = await validateMemory(root);
+				return { ok: issues.length === 0, issues };
+			});
 
 			connection.write({
 				v: PROFILE_VERSION,
@@ -1504,24 +1523,10 @@ async function handleRequest(
 				return;
 			}
 
-			// Start operation asynchronously; client gets opRef immediately.
-			void (async () => {
-				try {
-					const root = await initializeMemory(options.config.home);
-					const report = await autolinkCorpus(root, runtime.memory);
-					const stored = runtime.memoryOps.get(opRef);
-					if (stored) {
-						stored.status = "completed";
-						stored.result = report;
-					}
-				} catch (error) {
-					const stored = runtime.memoryOps.get(opRef);
-					if (stored) {
-						stored.status = "failed";
-						stored.error = diagnostic(error);
-					}
-				}
-			})();
+			startMemoryOperation(runtime, opRef, async () => {
+				const root = await initializeMemory(options.config.home);
+				return autolinkCorpus(root, runtime.memory);
+			});
 
 			connection.write({ v: PROFILE_VERSION, type: "response", id: request.id, result: { opRef } });
 			return;
@@ -1550,7 +1555,8 @@ async function handleRequest(
 				id: request.id,
 				result: {
 					status: op.status,
-					...(op.result ? { result: op.result } : {}),
+					elapsedMs: op.elapsedMs ?? Math.max(0, Date.now() - Date.parse(op.startedAt)),
+					...(op.result !== undefined ? { result: op.result } : {}),
 					...(op.error ? { error: op.error } : {}),
 				},
 			});

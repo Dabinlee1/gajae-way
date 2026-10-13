@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 
 import type {
 	MonitorEventRecord,
@@ -548,27 +548,30 @@ async function chat(socket: string): Promise<void> {
  * long-running and return an opRef immediately; this function polls for the result.
  * If the CLI wait expires before completion, report 'still running' instead of failure.
  */
-async function pollMemoryOp(
-	client: GajaewayClient,
+export async function pollMemoryOp(
+	client: Pick<GajaewayClient, "request">,
 	opRef: string,
 	maxWaitMs = 300_000, // 5 min default CLI timeout
-): Promise<{ status: "completed" | "failed" | "still_running"; result?: unknown; error?: string }> {
+	pollIntervalMs = 1_000,
+): Promise<{ status: "completed" | "failed" | "still_running"; elapsedMs: number; result?: unknown; error?: string }> {
 	const startTime = Date.now();
-	const pollIntervalMs = 1_000; // Poll every 1s (not 100ms to reduce load on long ops)
+	let operationElapsedMs = 0;
 
 	while (Date.now() - startTime < maxWaitMs) {
 		const status = await client.request<{
 			status: "pending" | "completed" | "failed";
+			elapsedMs: number;
 			result?: unknown;
 			error?: string;
 		}>("memory.status", { opRef });
+		operationElapsedMs = status.elapsedMs;
 
 		if (status.status === "completed") {
-			return { status: "completed", result: status.result };
+			return { status: "completed", elapsedMs: status.elapsedMs, result: status.result };
 		}
 
 		if (status.status === "failed") {
-			return { status: "failed", error: status.error };
+			return { status: "failed", elapsedMs: status.elapsedMs, error: status.error };
 		}
 
 		// Wait before polling again
@@ -576,10 +579,11 @@ async function pollMemoryOp(
 	}
 
 	// CLI wait expired, but operation may still be running on the server
+	const waitedMs = Date.now() - startTime;
 	console.error(
-		`memory operation still running (${Math.round((Date.now() - startTime) / 1000)}s elapsed).\nCheck status: gajaeway memory status ${opRef}`,
+		`memory operation still running (${Math.round(operationElapsedMs / 1000)}s operation elapsed; CLI wait ended after ${Math.round(waitedMs / 1000)}s).\nCheck status: gajaeway memory status ${opRef}`,
 	);
-	return { status: "still_running" };
+	return { status: "still_running", elapsedMs: operationElapsedMs };
 }
 
 export async function main(args = process.argv.slice(2), options: MainOptions = {}): Promise<void> {
@@ -774,7 +778,7 @@ export async function main(args = process.argv.slice(2), options: MainOptions = 
 						const initResp = await client.request<{ opRef: string }>("memory.audit");
 						const poll = await pollMemoryOp(client, initResp.opRef);
 						if (poll.status === "failed") {
-							console.error(`audit failed: ${poll.error}`);
+							console.error(`audit failed after ${poll.elapsedMs}ms: ${poll.error}`);
 							process.exitCode = 1;
 						} else if (poll.status === "still_running") {
 							// Operation is still running; exit with distinct code so it's not reported as failure
@@ -782,6 +786,7 @@ export async function main(args = process.argv.slice(2), options: MainOptions = 
 						} else {
 							const auditResult = poll.result as { ok?: boolean; issues?: unknown[] };
 							console.log(JSON.stringify(auditResult?.issues ?? []));
+							console.error(`audit completed in ${poll.elapsedMs}ms`);
 							if (!auditResult?.ok) process.exitCode = 1;
 						}
 					} else if (parsed.rest[0] === "autolink") {
@@ -789,7 +794,7 @@ export async function main(args = process.argv.slice(2), options: MainOptions = 
 						const initResp = await client.request<{ opRef: string }>("memory.autolink");
 						const poll = await pollMemoryOp(client, initResp.opRef);
 						if (poll.status === "failed") {
-							console.error(`autolink failed: ${poll.error}`);
+							console.error(`autolink failed after ${poll.elapsedMs}ms: ${poll.error}`);
 							process.exitCode = 1;
 						} else if (poll.status === "still_running") {
 							// Operation is still running; exit with distinct code so it's not reported as failure
@@ -805,16 +810,17 @@ export async function main(args = process.argv.slice(2), options: MainOptions = 
 						const opRef = parsed.rest[1];
 						const result = await client.request<{
 							status: "pending" | "completed" | "failed";
+							elapsedMs: number;
 							result?: unknown;
 							error?: string;
 						}>("memory.status", { opRef });
 						if (result.status === "failed") {
-							console.error(`operation ${opRef} failed: ${result.error}`);
+							console.error(`operation ${opRef} failed after ${result.elapsedMs}ms: ${result.error}`);
 							process.exitCode = 1;
 						} else if (result.status === "completed") {
-							console.log(JSON.stringify({ status: result.status, result: result.result }));
+							console.log(JSON.stringify(result));
 						} else {
-							console.log(JSON.stringify({ status: result.status }));
+							console.log(JSON.stringify({ status: result.status, elapsedMs: result.elapsedMs }));
 						}
 					} else throw new Error(usage);
 				} finally {

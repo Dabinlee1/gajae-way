@@ -3,11 +3,16 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { originKey, WORK_JOBS_DEFAULT_LIMIT, WORK_JOBS_MAX_LIMIT } from "@gajae-gateway/protocol";
+import {
+	type MemoryOperationStatusResult,
+	originKey,
+	WORK_JOBS_DEFAULT_LIMIT,
+	WORK_JOBS_MAX_LIMIT,
+} from "@gajae-gateway/protocol";
 import { createLaneJobRecord, MAX_STALLED_CONTINUATIONS, parseLaneJobRecord } from "@gajae-gateway/subsession";
 import type { GatewayConfig } from "../src/config";
 import { ACK_TIMEOUT_MS, DeliveryService } from "../src/delivery/delivery";
-import { memoryRoot } from "../src/memory/doctrine";
+import { initializeMemory, memoryGit, memoryRoot } from "../src/memory/doctrine";
 import { MonitorRegistry } from "../src/monitors/registry";
 import { deterministicTerminalDeliveryId } from "../src/orchestrator/tail-runner";
 import { type GatewayServer, startUnixServer } from "../src/server/server";
@@ -961,6 +966,70 @@ test("large memory.audit and concurrent progress remain independently parseable 
 	);
 	expect(client.frames.filter((frame) => frame.type === "response" && frame.id === "audit")).toHaveLength(1);
 	expect(client.wireLines).toHaveLength(client.frames.length);
+	client.close();
+});
+
+test("memory.autolink returns an operation ID and reports its committed result", async () => {
+	directory = await mkdtemp(join(tmpdir(), "gajaeway-server-memory-autolink-"));
+	const config: GatewayConfig = {
+		schemaVersion: 1,
+		home: directory,
+		gjc: { agentDir: join(directory, "agent") },
+		configPath: join(directory, "config.json"),
+		socketPath: join(directory, "gateway.sock"),
+		dbPath: join(directory, "gateway.db"),
+		logVerbosity: "info",
+		dmPolicy: "open",
+	};
+	const root = await initializeMemory(directory);
+	await mkdir(join(root, "people"), { recursive: true });
+	await writeFile(join(root, "people/alice-example.md"), "# Alice Example\n\nCanonical person.");
+	await mkdir(join(root, "ops/rules"), { recursive: true });
+	await writeFile(join(root, "ops/rules/example.md"), "Alice Example appears here.\n");
+	await memoryGit(root, ["add", "-A"]);
+	await memoryGit(root, ["commit", "-m", "autolink fixture"]);
+
+	const database = await Store.open(config.dbPath);
+	const sessionPort = sessionPortFromResponder({
+		bind: (key, epoch) => bindWorkFixture(key, epoch),
+		respond: async () => "unused",
+	});
+	attachTestBrokerOwnership(database, sessionPort, join(directory, "agent"));
+	server = await startUnixServer({ config, database, sessionPort, onStop: () => database.close() });
+	const client = await connect(config.socketPath);
+	client.send({ v: "0.1", type: "hello", payload: { supportedVersions: ["0.1"] } });
+	await waitFor(client.frames, 1);
+	client.send({ v: "0.1", type: "request", id: "autolink", verb: "memory.autolink" });
+	await waitFrame(client.frames, "autolink");
+	const accepted = client.frames.find((frame) => frame.id === "autolink");
+	const opRef = accepted?.result?.opRef as string;
+	expect(opRef).toMatch(/^gw-ml-/);
+
+	let completed: MemoryOperationStatusResult | undefined;
+	for (let attempt = 0; attempt < 200; attempt++) {
+		const id = `autolink-status-${attempt}`;
+		client.send({ v: "0.1", type: "request", id, verb: "memory.status", params: { opRef } });
+		await waitFrame(client.frames, id);
+		const status = client.frames.find((frame) => frame.id === id)?.result as MemoryOperationStatusResult | undefined;
+		if (status?.status === "completed") {
+			completed = status;
+			break;
+		}
+		await Bun.sleep(5);
+	}
+	const report = completed?.result;
+	expect(completed?.elapsedMs).toBeNumber();
+	expect(report && "commitSha" in report).toBe(true);
+	if (!report || !("commitSha" in report)) throw new Error("autolink status omitted its report");
+	expect(report.filesChanged).toBe(1);
+	expect(report.linksAdded).toBeGreaterThan(0);
+	if (typeof report.commitSha !== "string") throw new Error("autolink report omitted its commit SHA");
+	expect(report.commitSha).toMatch(/^[0-9a-f]{40}$/);
+	expect(report.elapsedMs).toBeNumber();
+	expect(await memoryGit(root, ["rev-parse", "HEAD"])).toBe(report.commitSha);
+	expect(await Bun.file(join(root, "ops/rules/example.md")).text()).toContain(
+		"[Alice Example](../../people/alice-example.md)",
+	);
 	client.close();
 });
 
