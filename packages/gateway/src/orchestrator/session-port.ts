@@ -24,17 +24,6 @@ import {
 import type { GjcModelSelection, GjcServiceTier } from "../config";
 import { BrokerAuthorityError, type Store } from "../store";
 import type { BrokerAuthority } from "../store/groups/bindings";
-
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-/** `anthropic/claude-opus-5-5:xhigh` → model id + thinking level; a string without a known level suffix is returned whole. */
-export function splitThinkingSuffix(selection: string): { readonly model: string; readonly thinking?: string } {
-	const at = selection.lastIndexOf(":");
-	if (at <= 0) return { model: selection };
-	const level = selection.slice(at + 1);
-	if (!THINKING_LEVELS.has(level)) return { model: selection };
-	return { model: selection.slice(0, at), thinking: level };
-}
 import {
 	type FailedTransportCause,
 	type FailedTurnEvidence,
@@ -51,6 +40,17 @@ import {
 	type TailHandle,
 	type TailRunner,
 } from "./tail-runner";
+
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/** `anthropic/claude-opus-5-5:xhigh` → model id + thinking level; a string without a known level suffix is returned whole. */
+export function splitThinkingSuffix(selection: string): { readonly model: string; readonly thinking?: string } {
+	const at = selection.lastIndexOf(":");
+	if (at <= 0) return { model: selection };
+	const level = selection.slice(at + 1);
+	if (!THINKING_LEVELS.has(level)) return { model: selection };
+	return { model: selection.slice(0, at), thinking: level };
+}
 
 /**
  * Generic broker-backed session surface. Callers own prompt composition,
@@ -472,13 +472,6 @@ export class BrokerSessionPort implements SessionPort {
 		if (typeof sessionId !== "string" || sessionId.length === 0) {
 			throw new Error("session.create succeeded without a sessionId");
 		}
-		// The host is live right after create: this is the one moment a control op
-		// cannot hit endpoint_stale, so the thinking level from a `model:level`
-		// selector is applied here rather than deferred to the first turn.
-		if (typeof input.model === "string") {
-			const { thinking } = splitThinkingSuffix(input.model);
-			if (thinking) await this.#setThinking(this.#cliTransport(sessionId), thinking);
-		}
 		const persistedEpoch = this.#database.bindings.getSessionRecord(input.originKey)?.epoch;
 		if (persistedEpoch !== undefined && persistedEpoch > input.epoch) {
 			throw new Error(`session bind for ${input.originKey} epoch ${input.epoch} lost to epoch ${persistedEpoch}`);
@@ -502,6 +495,12 @@ export class BrokerSessionPort implements SessionPort {
 		// a moment later. A tail/send before that answers session_unavailable, so
 		// wait until the broker reports the id live before handing the binding out.
 		await this.#awaitIndexed(sessionId, input.repo);
+		// Apply a model selector's thinking level while the newly-created host is
+		// ready and before the binding escapes; a later turn can hit endpoint_stale.
+		if (typeof input.model === "string") {
+			const { thinking } = splitThinkingSuffix(input.model);
+			if (thinking) await this.#setThinking(this.#cliTransport(sessionId), thinking);
+		}
 		this.#resetCreateRotations(input.originKey);
 		return {
 			sessionId,
