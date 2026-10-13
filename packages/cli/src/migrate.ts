@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-<<<<<<< HEAD
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-=======
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
->>>>>>> gajae-way/main
 import { join } from "node:path";
 import { acquireLease, type Lease, LeaseHeldError } from "@gajae-gateway/home";
 import { detectHermes, readHermes } from "./migrate/hermes";

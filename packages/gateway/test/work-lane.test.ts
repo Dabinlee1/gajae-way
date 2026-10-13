@@ -455,7 +455,7 @@ test("unavailable output preserves completed outcome without prior assistant fal
 	};
 	const run = f.manager.run({ name: "a", text: "work", cwd: f.directory }, {});
 	await until(() => f.port.sends.length === 1);
-	f.port.complete(f.port.sends[0]?.opRef ?? "", "untrusted");
+	f.port.complete(f.port.sends[0]!.opRef, "untrusted");
 	await expect(run).rejects.toMatchObject({ detail: { reasonCode: "output_unavailable" } });
 	expect(f.job().attempts[0]?.endState).toBe("completed");
 	expect(f.notices).toHaveLength(0);

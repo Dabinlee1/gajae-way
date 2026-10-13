@@ -191,20 +191,23 @@ test("completed turns are never pending or nonterminal", async () => {
 	expect(db.inbox.pendingCount(ORIGIN_KEY)).toBe(0);
 });
 
-test("inboundTurnComplete sets terminal_delivery_id even if turn_state is already done", async () => {
+test("turn completion repairs a missing terminal link on an already-done trigger", async () => {
 	const db = await open();
 	const opRef = "gw-p-already-done";
-	db.inboundEnqueue(message("m1", "hello"));
-	db.inboundBindTurn({ messageId: "m1", originKey: ORIGIN_KEY, epoch: 0, opRef, sessionId: "session-1" });
-	// Manually set the turn_state to 'done' to simulate a concurrent path
+	db.transaction((tx) => db.inbox.enqueue(tx, message("m1", "hello")));
+	db.transaction((tx) =>
+		db.inbox.bindTurn(tx, { messageId: "m1", originKey: ORIGIN_KEY, epoch: 0, opRef, sessionId: "session-1" }),
+	);
+	// Simulate another terminal path that closed the trigger without recording a delivery or reason.
 	const raw = new (await import("bun:sqlite")).Database(join(home, "gateway.db"));
-	raw.query("UPDATE inbound_messages SET turn_state = 'done' WHERE turn_op_ref = ?").run(opRef);
+	raw.query("UPDATE inbound_messages SET state = 'done', turn_state = 'done' WHERE turn_op_ref = ?").run(opRef);
 	raw.close();
-	// Now call inboundTurnComplete and it should still set the terminal_delivery_id
-	const changed = db.inboundTurnComplete(opRef, "turn_failed");
-	const row = db.inboundTurnRow(opRef);
-	expect(row?.terminal_delivery_id).toBe('{"none":"turn_failed"}');
-	expect(row?.turn_state).toBe('done');
+	expect(db.transaction((tx) => db.inbox.turnComplete(tx, opRef, "turn_failed"))).toBe(0);
+	expect(db.inbox.turnRow(opRef)).toMatchObject({
+		state: "done",
+		turn_state: "done",
+		terminal_delivery_id: '{"none":"turn_failed"}',
+	});
 });
 
 test("turn bindings are scoped per origin", async () => {
