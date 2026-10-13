@@ -2454,8 +2454,8 @@ class OriginActor {
 		const parts = spokenParts(text);
 		if (parts.length === 0) return { text, alreadyDelivered: false };
 		const posted = new Set(
-			this.#manager.database
-				.outbox.confirmedTextsSince(this.originKey, new Date(bound.dispatchedAtMs - TURN_FLOOR_SKEW_MS).toISOString())
+			this.#manager.database.outbox
+				.confirmedTextsSince(this.originKey, new Date(bound.dispatchedAtMs - TURN_FLOOR_SKEW_MS).toISOString())
 				.map((posted) => posted.trim()),
 		);
 		return { text, alreadyDelivered: posted.has(text) || parts.every((part) => posted.has(part)) };
