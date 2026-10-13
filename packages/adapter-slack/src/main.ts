@@ -1,13 +1,17 @@
+import { constants } from "node:fs";
+import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireLease, exitOnLeaseHeld, type Lease, LeaseHeldError } from "@gajae-gateway/home";
 import { installStructuredLogging } from "@gajae-gateway/log";
-import type {
-	ChannelEngagementPolicy,
-	ChatMessagePayload,
-	ChatProgressPayload,
-	EngagementContext,
-	EngagementPanelResponseParams,
-	OriginRef,
+import {
+	type ChannelEngagementPolicy,
+	type ChatMessagePayload,
+	type ChatProgressPayload,
+	type EngagementContext,
+	type EngagementPanelResponseParams,
+	type FileRef,
+	type OriginRef,
+	OUTBOUND_FILE_MAX_BYTES,
 } from "@gajae-gateway/protocol";
 import { GajaewayClient } from "@gajae-gateway/sdk";
 import pkg from "../package.json";
@@ -417,13 +421,9 @@ export async function settleSlackFile(
 		if (!api.uploadFile) throw new SlackApiError(0, "unsupported", "this Slack client cannot upload files");
 		const channel = deliveryChannel(message.origin);
 		const threadTs = replyThreadTs(message);
-		let bytes: Uint8Array;
-		try {
-			bytes = await Bun.file(message.file.path).bytes();
-		} catch (error) {
-			throw new SlackApiError(0, "file_unreadable", `cannot read ${message.file.name}: ${errorText(error)}`);
-		}
-		await api.uploadFile(channel, { name: message.file.name, bytes }, threadTs);
+		const bytes = await readOutboundFile(message.file);
+		const initialComment = message.duplicateWarning ? `[recovered - may be a duplicate] ${message.text}` : undefined;
+		await api.uploadFile(channel, { name: message.file.name, bytes }, threadTs, initialComment);
 		await gateway.request("delivery.confirm", { deliveryId });
 	} catch (error) {
 		await gateway.request("delivery.fail", {
@@ -431,6 +431,45 @@ export async function settleSlackFile(
 			reason: errorText(error),
 			ambiguous: deliveryFailureIsAmbiguous(error),
 		});
+	}
+}
+
+async function readOutboundFile(file: FileRef): Promise<Uint8Array> {
+	if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > OUTBOUND_FILE_MAX_BYTES)
+		throw new SlackApiError(0, "file_changed", `${file.name} has an invalid checked size`);
+	let handle: Awaited<ReturnType<typeof open>>;
+	try {
+		handle = await open(file.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	} catch (error) {
+		throw new SlackApiError(0, "file_unreadable", `cannot open ${file.name}: ${errorText(error)}`);
+	}
+	try {
+		const descriptorPath =
+			process.platform === "linux"
+				? `/proc/self/fd/${handle.fd}`
+				: process.platform === "darwin"
+					? `/dev/fd/${handle.fd}`
+					: undefined;
+		if (!descriptorPath || (await realpath(descriptorPath)) !== file.path)
+			throw new SlackApiError(0, "file_changed", `${file.name} changed after the gateway checked it`);
+		const stat = await handle.stat();
+		if (!stat.isFile() || stat.size !== file.size || stat.size > OUTBOUND_FILE_MAX_BYTES)
+			throw new SlackApiError(0, "file_changed", `${file.name} changed after the gateway checked it`);
+		const bytes = Buffer.allocUnsafe(file.size + 1);
+		let length = 0;
+		while (length < bytes.length) {
+			const read = await handle.read(bytes, length, bytes.length - length, null);
+			if (read.bytesRead === 0) break;
+			length += read.bytesRead;
+		}
+		if (length !== file.size)
+			throw new SlackApiError(0, "file_changed", `${file.name} changed while the adapter read it`);
+		return bytes.subarray(0, length);
+	} catch (error) {
+		if (error instanceof SlackApiError) throw error;
+		throw new SlackApiError(0, "file_unreadable", `cannot read ${file.name}: ${errorText(error)}`);
+	} finally {
+		await handle.close().catch(() => {});
 	}
 }
 

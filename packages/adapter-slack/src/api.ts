@@ -330,6 +330,7 @@ export class SlackWebApi {
 		channel: string,
 		file: { readonly name: string; readonly bytes: Uint8Array },
 		threadTs?: string,
+		initialComment?: string,
 	): Promise<void> {
 		await this.limiter?.acquire(channel, "delivery");
 		let fileId: string;
@@ -365,6 +366,7 @@ export class SlackWebApi {
 			files: JSON.stringify([{ id: fileId, title: file.name }]),
 			channel_id: channel,
 			...(threadTs === undefined ? {} : { thread_ts: threadTs }),
+			...(initialComment === undefined ? {} : { initial_comment: initialComment }),
 		});
 	}
 

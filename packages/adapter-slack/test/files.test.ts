@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatMessagePayload } from "@gajae-gateway/protocol";
@@ -7,9 +7,12 @@ import { SlackApiError, SlackWebApi } from "../src/api";
 import { type GatewayClientLike, settleSlackDelivery, settleSlackFile } from "../src/main";
 
 let directory = "";
+let outsideDirectory = "";
 afterEach(async () => {
 	if (directory) await rm(directory, { recursive: true, force: true });
 	directory = "";
+	if (outsideDirectory) await rm(outsideDirectory, { recursive: true, force: true });
+	outsideDirectory = "";
 });
 
 interface Sent {
@@ -104,12 +107,45 @@ test("a file delivery uploads into the reply thread and confirms; it never posts
 	expect(gateway.requests).toEqual([{ verb: "delivery.confirm", params: { deliveryId: "file-delivery" } }]);
 });
 
+test("an ambiguous recovered file upload includes the duplicate warning in its Slack comment", async () => {
+	const { api, sent } = uploadFixture();
+	const gateway = new Gateway();
+	await settleSlackDelivery(gateway, api, await fileDelivery({ duplicateWarning: true }));
+	const complete = sent.find((request) => request.url.endsWith("/files.completeUploadExternal"));
+	expect(Object.fromEntries(new URLSearchParams(String(complete?.body)))).toMatchObject({
+		initial_comment: "[recovered - may be a duplicate] 📎 report.csv",
+	});
+	expect(gateway.requests).toEqual([{ verb: "delivery.confirm", params: { deliveryId: "file-delivery" } }]);
+});
+
 test("a file that vanished before delivery fails definitively instead of posting anything", async () => {
 	const { api, sent } = uploadFixture();
 	const gateway = new Gateway();
 	const message = await fileDelivery();
-	await rm(message.file!.path);
+	const file = message.file;
+	if (!file) throw new Error("fixture did not include a file");
+	await rm(file.path);
 	await settleSlackFile(gateway, api, message);
+	expect(sent).toHaveLength(0);
+	expect(gateway.requests).toHaveLength(1);
+	expect(gateway.requests[0]?.verb).toBe("delivery.fail");
+	expect(gateway.requests[0]?.params).toMatchObject({ deliveryId: "file-delivery", ambiguous: false });
+});
+
+test("a file replaced with a symlink after the gateway check is refused before upload", async () => {
+	const { api, sent } = uploadFixture();
+	const gateway = new Gateway();
+	const message = await fileDelivery();
+	const file = message.file;
+	if (!file) throw new Error("fixture did not include a file");
+	outsideDirectory = await mkdtemp(join(tmpdir(), "gajaeway-slack-outside-"));
+	const secret = join(outsideDirectory, "secret.txt");
+	await writeFile(secret, "outside workspace");
+	await rm(file.path);
+	await symlink(secret, file.path);
+
+	await settleSlackFile(gateway, api, message);
+
 	expect(sent).toHaveLength(0);
 	expect(gateway.requests).toHaveLength(1);
 	expect(gateway.requests[0]?.verb).toBe("delivery.fail");

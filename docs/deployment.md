@@ -389,7 +389,8 @@ Both token files are credential-file references (relative paths resolve against 
 Create the Slack app from a manifest with:
 
 - Socket Mode **enabled**, and an app-level token with the `connections:write` scope (`appTokenFile`).
-- Bot token scopes: `app_mentions:read channels:history channels:read chat:write groups:history groups:read im:history im:read im:write mpim:history mpim:read reactions:read reactions:write users:read files:read commands`.
+- Bot token scopes: `app_mentions:read channels:history channels:read chat:write groups:history groups:read im:history im:read im:write mpim:history mpim:read reactions:read reactions:write users:read files:read files:write commands`.
+- `files:write` is required for outbound persona file attachments; the gateway accepts standalone `MEDIA:<absolute-path>` lines for Slack replies.
 - Event subscriptions (bot events): `message.channels message.groups message.im message.mpim reaction_added reaction_removed`.
 - Slash commands `/new`, `/reset`, `/restart`, and `/model` (any request URL; Socket Mode delivers them over the socket). Register `/model` even if you never plan to type it: Slack delivers a slash command to whichever workspace app registered its name, so if this app does not register `/model`, typing `/model` anywhere — including this bot's own DM — reaches whichever other app claimed it instead.
 

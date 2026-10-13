@@ -20,7 +20,7 @@ export interface OutboundFileScope {
 
 function isInside(child: string, parent: string): boolean {
 	const relative = path.relative(parent, child);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 async function canonical(target: string): Promise<string> {
@@ -55,7 +55,14 @@ export async function checkOutboundFile(requested: string, scope: OutboundFileSc
 	const [home, workspace, ...roots] = await Promise.all(
 		[scope.home, scope.workspace, ...(scope.roots ?? []).filter((root) => path.isAbsolute(root))].map(canonical),
 	);
-	const inWorkspace = isInside(resolved, workspace);
+	const workspaceRelative = path.relative(path.resolve(scope.home), path.resolve(scope.workspace));
+	const workspaceIsContained =
+		workspaceRelative !== "" &&
+		workspaceRelative !== ".." &&
+		!workspaceRelative.startsWith(`..${path.sep}`) &&
+		!path.isAbsolute(workspaceRelative);
+	const expectedWorkspace = path.resolve(home, workspaceRelative);
+	const inWorkspace = workspaceIsContained && workspace === expectedWorkspace && isInside(resolved, workspace);
 	if (isInside(resolved, home) && !inWorkspace)
 		return { ok: false, name, reason: "files under the gateway home (outside the workspace) are not sent" };
 	if (!inWorkspace && !roots.some((root) => isInside(resolved, root)))

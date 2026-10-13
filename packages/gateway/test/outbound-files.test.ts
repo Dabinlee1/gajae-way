@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { GatewayConfig } from "../src/config";
 import { checkOutboundFile, deterministicFileDeliveryId } from "../src/server/outbound-files";
 import { type GatewayServer, startUnixServer } from "../src/server/server";
-import { GatewayDatabase } from "../src/store/db";
+import { Store } from "../src/store";
 import { attachTestBrokerOwnership, sessionPortFromResponder } from "./session-port.fake";
 
 const SLACK_ORIGIN = { platform: "slack", kind: "channel", conversationId: "C1" } as const;
@@ -23,11 +23,32 @@ afterEach(async () => {
 
 interface Client {
 	send(value: unknown): void;
-	frames: any[];
+	frames: TestFrame[];
 }
 
+interface TestFrame {
+	readonly type: string;
+	readonly event?: string;
+	readonly payload?: unknown;
+}
+
+interface ChatMessageFrame {
+	readonly type: "event";
+	readonly event: "chat.message";
+	readonly payload: {
+		readonly text: string;
+		readonly file?: { readonly name: string; readonly size: number };
+		readonly replyToMessageId?: string;
+		readonly deliveryId?: string;
+	};
+}
+
+type FileMessageFrame = Omit<ChatMessageFrame, "payload"> & {
+	readonly payload: ChatMessageFrame["payload"] & { readonly file: NonNullable<ChatMessageFrame["payload"]["file"]> };
+};
+
 async function connect(socketPath: string): Promise<Client> {
-	const frames: any[] = [];
+	const frames: TestFrame[] = [];
 	let buffered = "";
 	const socket = await Bun.connect({
 		unix: socketPath,
@@ -36,7 +57,7 @@ async function connect(socketPath: string): Promise<Client> {
 				buffered += Buffer.from(data).toString();
 				const lines = buffered.split("\n");
 				buffered = lines.pop() ?? "";
-				for (const line of lines) if (line) frames.push(JSON.parse(line));
+				for (const line of lines) if (line) frames.push(JSON.parse(line) as TestFrame);
 			},
 		},
 	});
@@ -48,7 +69,7 @@ async function settle(): Promise<void> {
 }
 
 /** Home with a workspace file and a secret; `reply` gets the home so it can name real paths. */
-async function gateway(reply: (home: string) => string): Promise<{ client: Client; database: GatewayDatabase }> {
+async function gateway(reply: (home: string) => string): Promise<{ client: Client; database: Store }> {
 	directory = await mkdtemp(join(tmpdir(), "gajaeway-files-"));
 	await mkdir(join(directory, "workspace"), { recursive: true });
 	await mkdir(join(directory, "secrets"), { recursive: true });
@@ -57,13 +78,14 @@ async function gateway(reply: (home: string) => string): Promise<{ client: Clien
 	const config: GatewayConfig = {
 		schemaVersion: 1,
 		home: directory,
+		gjc: { agentDir: join(directory, "agent") },
 		configPath: join(directory, "config.json"),
 		socketPath: join(directory, "gateway.sock"),
 		dbPath: join(directory, "gateway.db"),
 		logVerbosity: "info",
 		channels: { "slack:C1": { engagement: "open" }, "chan-1": { engagement: "open" } },
 	};
-	const database = await GatewayDatabase.open(config.dbPath);
+	const database = await Store.open(config.dbPath);
 	const answer = reply(directory);
 	const sessionPort = sessionPortFromResponder({
 		bind: async (originKey, epoch) => `session-${originKey}-${epoch}`,
@@ -92,8 +114,25 @@ function sendMessage(client: Client, origin: unknown, messageId: string): void {
 	});
 }
 
-function messages(frames: any[]): any[] {
-	return frames.filter((frame) => frame.type === "event" && frame.event === "chat.message");
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function messages(frames: readonly TestFrame[]): ChatMessageFrame[] {
+	return frames.filter((frame): frame is ChatMessageFrame => {
+		if (frame.type !== "event" || frame.event !== "chat.message" || !isRecord(frame.payload)) return false;
+		const { file, replyToMessageId, deliveryId, text } = frame.payload;
+		return (
+			typeof text === "string" &&
+			(file === undefined || (isRecord(file) && typeof file.name === "string" && typeof file.size === "number")) &&
+			(replyToMessageId === undefined || typeof replyToMessageId === "string") &&
+			(deliveryId === undefined || typeof deliveryId === "string")
+		);
+	});
+}
+
+function fileMessages(frames: readonly ChatMessageFrame[]): FileMessageFrame[] {
+	return frames.filter((frame): frame is FileMessageFrame => frame.payload.file !== undefined);
 }
 
 test("a MEDIA: line becomes a file delivery in the reply's thread and leaves the text clean", async () => {
@@ -104,10 +143,11 @@ test("a MEDIA: line becomes a file delivery in the reply's thread and leaves the
 	await settle();
 	const delivered = messages(client.frames);
 	const text = delivered.filter((frame) => !frame.payload.file);
-	const files = delivered.filter((frame) => frame.payload.file);
+	const files = fileMessages(delivered);
 	expect(text.map((frame) => frame.payload.text)).toEqual(["보고서 올립니다."]);
 	expect(files).toHaveLength(1);
 	const [file] = files;
+	if (!file) throw new Error("expected a file delivery");
 	expect(file.payload.file.name).toBe("report.csv");
 	expect(file.payload.file.size).toBe(8);
 	expect(file.payload.text).toBe("📎 report.csv");
@@ -118,7 +158,7 @@ test("a MEDIA: line becomes a file delivery in the reply's thread and leaves the
 	expect(file.payload.deliveryId).toBe(
 		deterministicFileDeliveryId("slack/channel/C1", SLACK_TRIGGER, join(directory, "workspace", "report.csv")),
 	);
-	expect(database.deliveryRows().some((row) => row.delivery_id === file.payload.deliveryId)).toBe(true);
+	expect(database.outbox.rows().some((row) => row.delivery_id === file.payload.deliveryId)).toBe(true);
 });
 
 test("a file-only reply uploads the file and speaks no empty message", async () => {
@@ -127,7 +167,7 @@ test("a file-only reply uploads the file and speaks no empty message", async () 
 	await settle();
 	const delivered = messages(client.frames);
 	expect(delivered).toHaveLength(1);
-	expect(delivered[0].payload.file.name).toBe("report.csv");
+	expect(fileMessages(delivered)[0]?.payload.file.name).toBe("report.csv");
 });
 
 test("a file under the gateway home outside the workspace is refused with a visible note, never uploaded", async () => {
@@ -241,4 +281,22 @@ test("checkOutboundFile sends only workspace and configured-root files and refus
 	expect(
 		await reasons([join(directory, "loose.txt"), join(home, "secrets", "token"), join(home, "gateway.db")], scope),
 	).toEqual(["ok", homeRefusal, homeRefusal]);
+});
+
+test("a workspace root symlink cannot expose gateway-home secrets", async () => {
+	directory = await mkdtemp(join(tmpdir(), "gajaeway-files-workspace-link-"));
+	const home = join(directory, "home");
+	const workspace = join(home, "workspace");
+	const secrets = join(home, "secrets");
+	await mkdir(secrets, { recursive: true });
+	await writeFile(join(secrets, "token"), "secret");
+	await symlink(secrets, workspace);
+
+	const result = await checkOutboundFile(join(workspace, "token"), { home, workspace });
+
+	expect(result).toEqual({
+		ok: false,
+		name: "token",
+		reason: "files under the gateway home (outside the workspace) are not sent",
+	});
 });
